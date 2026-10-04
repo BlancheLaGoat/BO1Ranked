@@ -297,8 +297,8 @@ public class MainForm : Form
             BackColor = ColorSidebar
         };
 
-        sidebar.Controls.Add(MakeLabel("BO1 RANKED", 20, 22, 170, 32, 15f, FontStyle.Bold, ColorAccent));
-        sidebar.Controls.Add(MakeLabel("Zombies 1v1 - race to round 30", 21, 54, 175, 18, 8f, FontStyle.Regular, ColorMuted));
+        sidebar.Controls.Add(MakeLabel("BO1 RANKED", 18, 20, 180, 34, 14f, FontStyle.Bold, ColorAccent));
+        sidebar.Controls.Add(MakeLabel("Zombies 1v1", 20, 54, 178, 18, 8.5f, FontStyle.Regular, ColorMuted));
 
         string[] titles = { "PLAY", "LADDER", "PROFILE", "MOD FILES" };
         Panel[] targets = { playPage, ladderPage, profilePage, modPage };
@@ -1543,7 +1543,10 @@ public class MainForm : Form
                 break;
 
             case "WAITING":
-                SetStatus("Looking for an opponent...");
+                // The server first looks for an opponent close to your Elo, then widens the range as time passes.
+                SetStatus(f.Length >= 2
+                    ? "Looking for an opponent (within " + f[1] + " Elo)..."
+                    : "Looking for an opponent...");
                 break;
 
             case "MATCH":
