@@ -179,6 +179,17 @@ rr_link_main()
 	finished = false;
 	lost = false;
 	finish_time = 0;
+	gave_up = false;		// mort ou abandon : defaite immediate
+	opp_out = false;		// l'adversaire est mort, a abandonne ou a quitte : victoire
+
+	level.rr_surrender = false;
+	level.rr_dead = false;
+	if ( in_match )
+	{
+		// Commande console "surrender" (fournie par le plugin t5-gsc-utils).
+		addCommand( "surrender", ::rr_cmd_surrender );
+		level thread rr_watch_game_over();
+	}
 
 	opp_round = 0;
 	opp_zone = "";
@@ -216,7 +227,7 @@ rr_link_main()
 		{
 			setDvar( "ranked_my_time", int( elapsed / 1000 ) );
 
-			if ( my_round >= goal )
+			if ( my_round >= goal && !gave_up )
 			{
 				finished = true;
 				setDvar( "ranked_my_finished", 1 );
@@ -235,6 +246,21 @@ rr_link_main()
 			}
 		}
 
+		// ---------------- mort ou abandon ----------------
+		if ( in_match && !finished && !lost && !opp_out && !gave_up && ( level.rr_surrender || level.rr_dead ) )
+		{
+			gave_up = true;
+			hud_result.color = ( 1, 0.3, 0.3 );
+			if ( level.rr_surrender )
+			{
+				hud_result setText( "DEFEAT - you surrendered" );
+			}
+			else
+			{
+				hud_result setText( "DEFEAT - you died" );
+			}
+		}
+
 		// ---------------- mon etat -> fichier ----------------
 		file_zone = my_zone;
 		if ( file_zone == "" )
@@ -248,6 +274,10 @@ rr_link_main()
 		{
 			file_time = finish_time;
 			file_finished = 1;
+		}
+		if ( gave_up )
+		{
+			file_finished = 2;		// 2 = elimine (mort ou abandon)
 		}
 
 		seed = 0;
@@ -317,7 +347,14 @@ rr_link_main()
 			}
 		}
 
-		if ( opp_finished > 0 && !finished && !lost )
+		if ( opp_finished == 2 && !finished && !lost && !gave_up && !opp_out )
+		{
+			opp_out = true;
+			hud_result.color = ( 0.3, 1, 0.3 );
+			hud_result setText( "VICTORY - your opponent is out" );
+		}
+
+		if ( opp_finished == 1 && !finished && !lost && !gave_up && !opp_out )
 		{
 			lost = true;
 			hud_result.color = ( 1, 0.3, 0.3 );
@@ -416,6 +453,23 @@ rr_wait_for_go( player, goal )
 	flag_set( "spawn_zombies" );
 
 	hud thread rr_destroy_after( 2 );
+
+	if ( !cancelled )
+	{
+		iPrintLn( "Type 'surrender' in the console to give up" );
+	}
+}
+
+rr_cmd_surrender( args )
+{
+	level.rr_surrender = true;
+}
+
+// Fin de partie (mort du joueur en solo) = defaite.
+rr_watch_game_over()
+{
+	level waittill( "end_game" );
+	level.rr_dead = true;
 }
 
 rr_destroy_after( seconds )
@@ -470,6 +524,7 @@ rr_zone_name( zone )
 	switch ( zone )
 	{
 		case "":					return "";
+		case "paused":				return "GAME PAUSED";
 		case "foyer_zone":			return "Lobby";
 		case "foyer2_zone":			return "Lobby (back)";
 		case "vip_zone":			return "Upper Hall";

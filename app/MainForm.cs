@@ -84,6 +84,11 @@ public class MainForm : Form
     private bool testBotFinished;
     private bool readySent;                  // this player pressed "ready" in game and the server knows
     private bool goGiven;                    // go.txt written: the countdown is running or the race is on
+    private bool lostSent;                   // this player died or surrendered and the server knows
+    private bool pauseSent;                  // the opponent has been told this game is paused
+    private string lastRawState = "";
+    private DateTime lastRawChange;
+    private int lastOpponentRound;
 
     public MainForm()
     {
@@ -641,6 +646,11 @@ public class MainForm : Form
         pendingOpponentLine = null;
         readySent = false;
         goGiven = false;
+        lostSent = false;
+        pauseSent = false;
+        lastRawState = "";
+        lastRawChange = DateTime.UtcNow;
+        lastOpponentRound = 0;
 
         try
         {
@@ -713,6 +723,36 @@ public class MainForm : Form
 
         if (mine && goGiven)
         {
+            // Died or surrendered in game (finished field = 2): immediate defeat.
+            if (f[4] == "2")
+            {
+                if (testMode)
+                {
+                    EndMatch("DEFEAT: you died or surrendered");
+                }
+                else if (!lostSent)
+                {
+                    lostSent = true;
+                    await SendLine("LOST");
+                }
+                return;
+            }
+
+            // The mod rewrites state.txt twice a second. If it stops changing, the game is paused
+            // (or frozen): the race goes on, and the opponent is told.
+            if (line != lastRawState)
+            {
+                lastRawState = line;
+                lastRawChange = DateTime.UtcNow;
+                pauseSent = false;
+            }
+            else if (!testMode && !pauseSent && (DateTime.UtcNow - lastRawChange).TotalSeconds > 3)
+            {
+                pauseSent = true;
+                lastStateSent = "";
+                await SendLine("STATE;" + f[0] + ";paused;" + f[2] + ";" + f[3] + ";0;0");
+            }
+
             string state = string.Join(";", f, 0, 6);
             if (state != lastStateSent)
             {
@@ -788,6 +828,7 @@ public class MainForm : Form
 
     private void ShowOpponent(int round, string zone, int down, int finished)
     {
+        lastOpponentRound = round;
         pendingOpponentLine = round + ";" + zone + ";" + down + ";" + finished;
         opponentLabel.Text = "Opponent: round " + round + " - " + zone + (down == 1 ? " - DOWN" : "");
     }
@@ -989,9 +1030,26 @@ public class MainForm : Form
             case "RESULT":
                 if (inMatch && f.Length >= 4)
                 {
-                    FlushOpponentFile();
-                    if (f[1] == "WIN") EndMatch("VICTORY in " + FormatTime(f[2]));
-                    else EndMatch("DEFEAT: opponent finished in " + FormatTime(f[3]));
+                    // A time of 0 means the match ended by a death or a surrender, not by reaching the goal.
+                    if (f[1] == "WIN" && f[2] == "0")
+                    {
+                        ShowOpponent(lastOpponentRound, "none", 0, 2);
+                        FlushOpponentFile();
+                        EndMatch("VICTORY: your opponent died or surrendered");
+                    }
+                    else if (f[1] == "WIN")
+                    {
+                        EndMatch("VICTORY in " + FormatTime(f[2]));
+                    }
+                    else if (f[3] == "0")
+                    {
+                        EndMatch("DEFEAT: you died or surrendered");
+                    }
+                    else
+                    {
+                        FlushOpponentFile();
+                        EndMatch("DEFEAT: opponent finished in " + FormatTime(f[3]));
+                    }
                     await Disconnect();
                 }
                 break;
@@ -999,6 +1057,8 @@ public class MainForm : Form
             case "OPPLEFT":
                 if (inMatch)
                 {
+                    ShowOpponent(lastOpponentRound, "none", 0, 2);
+                    FlushOpponentFile();
                     EndMatch("VICTORY by forfeit: opponent left");
                     await Disconnect();
                 }
