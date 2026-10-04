@@ -5,7 +5,8 @@
 // Les fichiers sont dans Plutonium\storage\t5\ranked\ :
 //
 //   state.txt     ecrit par le mod, lu par l'app compagnon. Une ligne :
-//                 round;zone;a_terre;temps_ms;termine;temps_final_ms;seed;objectif
+//                 round;zone;a_terre;temps_ms;termine;temps_final_ms;seed;objectif;pret
+//   go.txt        ecrit par l'app compagnon quand les deux joueurs sont prets. Contient la seed du match.
 //   opponent.txt  ecrit par l'app compagnon, lu par le mod. Une ligne :
 //                 round;zone;a_terre;termine
 //                 (zone = "none" si inconnue)
@@ -86,16 +87,22 @@ rr_link_main()
 		// Evite d'afficher l'adversaire de la partie precedente.
 		removeFile( "ranked/opponent.txt" );
 	}
-	writeFile( "ranked/state.txt", "0;none;0;0;0;0;0;0" );
+	if ( fileExists( "ranked/go.txt" ) )
+	{
+		removeFile( "ranked/go.txt" );
+	}
+	writeFile( "ranked/state.txt", "0;none;0;0;0;0;0;0;0" );
 
 	// Objectif : celui du match en cours (ranked/match.txt = "seed;objectif"), sinon la dvar, sinon 30.
 	goal = 0;
+	in_match = false;
 	if ( fileExists( "ranked/match.txt" ) )
 	{
 		tokens = strTok( readFile( "ranked/match.txt" ), ";" );
 		if ( tokens.size >= 2 )
 		{
 			goal = int( tokens[1] );
+			in_match = true;
 		}
 	}
 	if ( goal <= 0 )
@@ -111,12 +118,33 @@ rr_link_main()
 	{
 		wait 0.5;
 	}
+	player = get_players()[0];
+
+	// En match : aucun zombie n'apparait tant que les deux joueurs ne sont pas prets.
+	// Le drapeau est coupe des qu'il existe, avant le debut du round 1.
+	if ( in_match )
+	{
+		while ( !isDefined( level.flag ) || !isDefined( level.flag["spawn_zombies"] ) )
+		{
+			wait 0.05;
+		}
+		flag_clear( "spawn_zombies" );
+	}
+
 	while ( !rr_flag_is_set( "begin_spawning" ) )
 	{
+		if ( in_match )
+		{
+			player freezeControls( true );
+		}
 		wait 0.1;
 	}
 
-	player = get_players()[0];
+	if ( in_match )
+	{
+		rr_wait_for_go( player, goal );
+	}
+
 	start_time = getTime();
 
 	// Bandeau permanent : visible meme si l'affichage des checksums etait bloque.
@@ -228,7 +256,7 @@ rr_link_main()
 			seed = level.rr_seed;
 		}
 
-		writeFile( "ranked/state.txt", my_round + ";" + file_zone + ";" + my_down + ";" + file_time + ";" + file_finished + ";" + finish_time + ";" + seed + ";" + goal );
+		writeFile( "ranked/state.txt", my_round + ";" + file_zone + ";" + my_down + ";" + file_time + ";" + file_finished + ";" + finish_time + ";" + seed + ";" + goal + ";1" );
 
 		// ---------------- etat adverse -> HUD ----------------
 		if ( fileExists( "ranked/opponent.txt" ) )
@@ -298,6 +326,102 @@ rr_link_main()
 
 		wait 0.5;
 	}
+}
+
+// Depart synchronise. Le joueur est bloque au spawn, appuie sur une touche quand il est pret,
+// et la partie demarre apres un compte a rebours quand l'app compagnon ecrit ranked/go.txt
+// (c'est-a-dire quand le serveur a recu "pret" des deux joueurs).
+// Si le match est annule (ranked/match.txt supprime par l'app), le joueur est libere sans compte a rebours.
+rr_wait_for_go( player, goal )
+{
+	hud = NewClientHudElem( player );
+	hud.foreground = true;
+	hud.sort = 2;
+	hud.hidewheninmenu = false;
+	hud.alignX = "center";
+	hud.alignY = "middle";
+	hud.horzAlign = "center";
+	hud.vertAlign = "middle";
+	hud.x = 0;
+	hud.y = -60;
+	hud.fontScale = 2.2;
+	hud.alpha = 1;
+	hud.color = ( 1, 1, 1 );
+	hud setText( "Press USE or FIRE when you are ready" );
+
+	seed = 0;
+	if ( isDefined( level.rr_seed ) )
+	{
+		seed = level.rr_seed;
+	}
+
+	ready = 0;
+	cancelled = false;
+	ticks = 0;
+
+	while ( 1 )
+	{
+		player freezeControls( true );
+
+		if ( !ready && ( player useButtonPressed() || player attackButtonPressed() ) )
+		{
+			ready = 1;
+			hud.color = ( 0.3, 1, 0.3 );
+			hud setText( "READY - waiting for your opponent" );
+		}
+
+		// Fichiers : toutes les 0.3 s seulement.
+		if ( ticks % 3 == 0 )
+		{
+			writeFile( "ranked/state.txt", "1;none;0;0;0;0;" + seed + ";" + goal + ";" + ready );
+
+			if ( ready && fileExists( "ranked/go.txt" ) )
+			{
+				break;
+			}
+			if ( !fileExists( "ranked/match.txt" ) )
+			{
+				cancelled = true;
+				break;
+			}
+		}
+
+		ticks++;
+		wait 0.1;
+	}
+
+	if ( cancelled )
+	{
+		hud.color = ( 1, 0.3, 0.3 );
+		hud setText( "Match cancelled" );
+	}
+	else
+	{
+		hud.color = ( 1, 0.8, 0.2 );
+		hud.fontScale = 3;
+		for ( count = 3; count > 0; count-- )
+		{
+			hud setText( "" + count );
+			for ( i = 0; i < 10; i++ )
+			{
+				player freezeControls( true );
+				wait 0.1;
+			}
+		}
+		hud.color = ( 0.3, 1, 0.3 );
+		hud setText( "GO!" );
+	}
+
+	player freezeControls( false );
+	flag_set( "spawn_zombies" );
+
+	hud thread rr_destroy_after( 2 );
+}
+
+rr_destroy_after( seconds )
+{
+	wait seconds;
+	self destroy();
 }
 
 rr_flag_is_set( name )

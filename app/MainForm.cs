@@ -82,6 +82,8 @@ public class MainForm : Form
     private DateTime testStart;
     private bool testBotRunning;
     private bool testBotFinished;
+    private bool readySent;                  // this player pressed "ready" in game and the server knows
+    private bool goGiven;                    // go.txt written: the countdown is running or the race is on
 
     public MainForm()
     {
@@ -637,11 +639,14 @@ public class MainForm : Form
         matchGoal = goal;
         lastStateSent = "";
         pendingOpponentLine = null;
+        readySent = false;
+        goGiven = false;
 
         try
         {
             Directory.CreateDirectory(rankedDir);
             DeleteRankedFile("opponent.txt");
+            DeleteRankedFile("go.txt");
             File.WriteAllText(Path.Combine(rankedDir, "match.txt"), seed + ";" + goal);
         }
         catch (Exception ex)
@@ -656,7 +661,7 @@ public class MainForm : Form
         uninstallButton.Enabled = false;
         stopButton.Enabled = true;
 
-        SetStatus("Match found: start Kino der Toten (solo) now!");
+        SetStatus("Match found: start Kino (solo), then ready up in game");
         matchLabel.Text = "Opponent: " + opponentName + "   |   seed " + seed + "   |   goal: round " + goal;
         opponentLabel.Text = "";
         Log("Match vs " + opponentName + ", seed " + seed);
@@ -669,7 +674,8 @@ public class MainForm : Form
         inMatch = false;
         testMode = false;
         pollTimer.Stop();
-        DeleteRankedFile("match.txt");
+        DeleteRankedFile("match.txt");      // also frees a player still waiting at spawn
+        DeleteRankedFile("go.txt");
 
         SetIdleButtons();
         SetStatus(status);
@@ -683,13 +689,29 @@ public class MainForm : Form
         FlushOpponentFile();
 
         // --- my state: state.txt -> server ---
-        // Format: round;zone;down;time_ms;finished;finish_time_ms;seed;goal
+        // Format: round;zone;down;time_ms;finished;finish_time_ms;seed;goal;ready
         string line = ReadRankedFile("state.txt");
         string[] f = line == null ? new string[0] : line.Trim().Split(';');
 
         // Ignore the file until it comes from this match's game (different seed = older game).
-        bool mine = f.Length >= 8 && f[6] == matchSeed.ToString();
-        if (mine)
+        bool mine = f.Length >= 9 && f[6] == matchSeed.ToString();
+
+        // Synchronised start: the player is held at spawn until both sides are ready.
+        if (mine && !readySent && f[8] == "1")
+        {
+            readySent = true;
+            if (testMode)
+            {
+                GiveGo();       // the bot is always ready
+            }
+            else
+            {
+                SetStatus("Ready - waiting for your opponent");
+                await SendLine("READY");
+            }
+        }
+
+        if (mine && goGiven)
         {
             string state = string.Join(";", f, 0, 6);
             if (state != lastStateSent)
@@ -712,14 +734,34 @@ public class MainForm : Form
             }
         }
 
-        // The bot only starts once your game has started, so it gets no head start during loading.
-        if (testMode && !testBotRunning && mine && f[0] != "0")
+        if (testMode && testBotRunning) TestBotTick();
+    }
+
+    // Tells the mod to start: it shows a 3 second countdown, then releases the player and the zombies.
+    private void GiveGo()
+    {
+        if (goGiven) return;
+
+        try
         {
-            testBotRunning = true;
-            testStart = DateTime.UtcNow;
+            File.WriteAllText(Path.Combine(rankedDir, "go.txt"), matchSeed.ToString());
+        }
+        catch (Exception ex)
+        {
+            Log("Could not write go.txt: " + ex.Message);
+            return;
         }
 
-        if (testMode && testBotRunning) TestBotTick();
+        goGiven = true;
+        SetStatus("Both players ready - GO!");
+        Log("Both players ready, race started");
+
+        if (testMode)
+        {
+            // The bot starts with the player, after the in-game countdown.
+            testBotRunning = true;
+            testStart = DateTime.UtcNow.AddSeconds(3);
+        }
     }
 
     // Test mode opponent: gains one round every TestBotSecondsPerRound seconds.
@@ -728,6 +770,7 @@ public class MainForm : Form
         string[] zones = { "foyer_zone", "vip_zone", "dining_zone", "dressing_zone", "stage_zone", "theater_zone" };
 
         int seconds = (int)(DateTime.UtcNow - testStart).TotalSeconds;
+        if (seconds < 0) return;        // countdown still running
         int round = Math.Min(matchGoal, 1 + seconds / TestBotSecondsPerRound);
         string zone = zones[(seconds / 10) % zones.Length];
         int down = (seconds % 40) >= 35 ? 1 : 0;
@@ -930,6 +973,10 @@ public class MainForm : Form
                     testMode = false;
                     BeginMatch(ParseInt(f[1]), ParseInt(f[2]), f[3]);
                 }
+                break;
+
+            case "GO":
+                if (inMatch) GiveGo();
                 break;
 
             case "OPP":
