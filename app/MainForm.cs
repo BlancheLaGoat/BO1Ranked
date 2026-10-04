@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace BO1Ranked;
@@ -18,6 +21,19 @@ namespace BO1Ranked;
 public class MainForm : Form
 {
     private const string ServerUrl = "wss://ranked-d5oa.onrender.com";
+    private const string ServerHttpUrl = "https://ranked-d5oa.onrender.com";     // ladder and profile pages
+
+    // Theme.
+    private static readonly Color ColorWindow = Color.FromArgb(31, 31, 31);
+    private static readonly Color ColorSidebar = Color.FromArgb(22, 22, 22);
+    private static readonly Color ColorCard = Color.FromArgb(42, 42, 42);
+    private static readonly Color ColorHover = Color.FromArgb(58, 58, 58);
+    private static readonly Color ColorAccent = Color.FromArgb(255, 85, 0);
+    private static readonly Color ColorText = Color.FromArgb(237, 237, 237);
+    private static readonly Color ColorMuted = Color.FromArgb(154, 154, 154);
+    private static readonly Color ColorGood = Color.FromArgb(61, 220, 132);
+    private static readonly Color ColorWarn = Color.FromArgb(255, 176, 32);
+    private static readonly Color ColorBad = Color.FromArgb(255, 77, 77);
 
     // Public GitHub repository whose latest release holds the newest BO1Ranked.exe (see CheckForUpdate).
     private const string UpdateRepo = "BlancheLaGoat/BO1Ranked";
@@ -51,6 +67,11 @@ public class MainForm : Form
     private static readonly string settingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BO1Ranked", "settings.txt");
 
+    // Secret key created on first start. The server ties the player's name, Elo and history to it,
+    // so nobody else can play under that name. Losing this file means starting a new account.
+    private static readonly string identityPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BO1Ranked", "identity.txt");
+
     // Present only when this app downloaded the plugin itself: uninstall then removes it too.
     private static readonly string pluginMarkerPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BO1Ranked", "plugin-installed-by-app");
@@ -67,6 +88,28 @@ public class MainForm : Form
     private readonly Label opponentLabel = new Label();
     private readonly ListBox logBox = new ListBox();
     private readonly System.Windows.Forms.Timer pollTimer = new System.Windows.Forms.Timer();
+
+    // Pages (one visible at a time) and their navigation buttons.
+    private readonly Panel playPage = new Panel();
+    private readonly Panel ladderPage = new Panel();
+    private readonly Panel profilePage = new Panel();
+    private readonly Panel modPage = new Panel();
+    private readonly List<Button> navButtons = new List<Button>();
+    private readonly List<Panel> pages = new List<Panel>();
+
+    private readonly Label sideNameLabel = new Label();
+    private readonly Label sideEloLabel = new Label();
+    private readonly Label ladderStatusLabel = new Label();
+    private readonly DataGridView ladderGrid = new DataGridView();
+    private readonly Button saveNameButton = new Button();
+    private readonly Label profileEloLabel = new Label();
+    private readonly Label profileRecordLabel = new Label();
+    private readonly Label profileHintLabel = new Label();
+    private readonly DataGridView historyGrid = new DataGridView();
+
+    private static readonly HttpClient web = new HttpClient { Timeout = TimeSpan.FromSeconds(70) };
+    private string identityToken = "";
+    private string playerName = "";         // name last saved (the one sent to the server)
 
     private ClientWebSocket socket;
     private CancellationTokenSource socketCancel;
@@ -97,71 +140,23 @@ public class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Font = new Font("Segoe UI", 9.5f);
-        ClientSize = new Size(460, 506);
+        Font = new Font("Segoe UI", 9.75f);
+        BackColor = ColorWindow;
+        ForeColor = ColorText;
+        ClientSize = new Size(840, 560);
 
-        var nameLabel = new Label { Text = "Name", Location = new Point(16, 18), AutoSize = true };
-        nameBox.Location = new Point(90, 15);
-        nameBox.Size = new Size(354, 25);
-        nameBox.MaxLength = 24;
-
-        modLabel.Location = new Point(16, 54);
-        modLabel.Size = new Size(428, 22);
-        modLabel.Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-
-        installButton.Text = "Install mod files";
-        installButton.Location = new Point(16, 80);
-        installButton.Size = new Size(210, 30);
-        installButton.Click += async (s, e) => await InstallClicked();
-
-        uninstallButton.Text = "Uninstall mod files";
-        uninstallButton.Location = new Point(234, 80);
-        uninstallButton.Size = new Size(210, 30);
-        uninstallButton.Click += (s, e) => UninstallClicked();
-
-        searchButton.Text = "Find a match";
-        searchButton.Location = new Point(16, 126);
-        searchButton.Size = new Size(428, 44);
-        searchButton.Font = new Font("Segoe UI", 12f, FontStyle.Bold);
-        searchButton.Click += async (s, e) => await SearchClicked();
-
-        testButton.Text = "Test mode (bot opponent, round " + TestGoal + ")";
-        testButton.Location = new Point(16, 178);
-        testButton.Size = new Size(280, 30);
-        testButton.Click += (s, e) => StartTestMatch();
-
-        stopButton.Text = "Leave match";
-        stopButton.Location = new Point(304, 178);
-        stopButton.Size = new Size(140, 30);
-        stopButton.Enabled = false;
-        stopButton.Click += async (s, e) => await StopClicked();
-
-        statusLabel.Location = new Point(16, 222);
-        statusLabel.Size = new Size(428, 24);
-        statusLabel.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
-        statusLabel.Text = "Ready";
-
-        matchLabel.Location = new Point(16, 250);
-        matchLabel.Size = new Size(428, 22);
-
-        opponentLabel.Location = new Point(16, 274);
-        opponentLabel.Size = new Size(428, 22);
-
-        logBox.Location = new Point(16, 306);
-        logBox.Size = new Size(428, 184);
-        logBox.IntegralHeight = false;
-        logBox.HorizontalScrollbar = true;
-
-        Controls.AddRange(new Control[]
-        {
-            nameLabel, nameBox, modLabel, installButton, uninstallButton,
-            searchButton, testButton, stopButton, statusLabel, matchLabel, opponentLabel, logBox
-        });
+        BuildSidebar();
+        BuildPlayPage();
+        BuildLadderPage();
+        BuildProfilePage();
+        BuildModPage();
+        ShowPage(playPage);
 
         pollTimer.Interval = 500;
         pollTimer.Tick += async (s, e) => await PollTick();
 
         LoadSettings();
+        LoadIdentity();
         FormClosing += (s, e) => { SaveSettings(); DeleteRankedFile("match.txt"); };
 
         if (!Directory.Exists(plutoniumDir))
@@ -171,7 +166,531 @@ public class MainForm : Form
         RefreshModStatus();
         UpdateInstalledScripts();
 
-        Shown += async (s, e) => await CheckForUpdate();
+        Shown += async (s, e) =>
+        {
+            await CheckForUpdate();
+            await RefreshProfile();
+        };
+    }
+
+    // Dark title bar on Windows 10/11. Purely cosmetic: ignored where it is not supported.
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        try
+        {
+            int on = 1;
+            DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int));
+        }
+        catch
+        {
+        }
+    }
+
+    // ------------------------------------------------------------------ interface
+
+    private const int SidebarWidth = 200;
+    private const int PageWidth = 640;
+    private const int PageMargin = 28;
+    private const int ContentWidth = PageWidth - 2 * PageMargin;
+
+    private static Label MakeLabel(string text, int x, int y, int width, int height, float size, FontStyle style, Color color)
+    {
+        return new Label
+        {
+            Text = text,
+            Location = new Point(x, y),
+            Size = new Size(width, height),
+            Font = new Font("Segoe UI", size, style),
+            ForeColor = color,
+            BackColor = Color.Transparent,
+            AutoEllipsis = true
+        };
+    }
+
+    private static void StyleButton(Button button, Color back, Color fore, float size, FontStyle style)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderSize = 0;
+        button.FlatAppearance.MouseOverBackColor = ControlPaint.Light(back, 0.25f);
+        button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(back, 0.1f);
+        button.BackColor = back;
+        button.ForeColor = fore;
+        button.Font = new Font("Segoe UI", size, style);
+        button.Cursor = Cursors.Hand;
+        button.UseVisualStyleBackColor = false;
+    }
+
+    private static void StyleGrid(DataGridView grid)
+    {
+        grid.BackgroundColor = ColorWindow;
+        grid.BorderStyle = BorderStyle.None;
+        grid.GridColor = ColorHover;
+        grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+        grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
+        grid.EnableHeadersVisualStyles = false;
+        grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        grid.ColumnHeadersHeight = 34;
+        grid.RowTemplate.Height = 30;
+        grid.RowHeadersVisible = false;
+        grid.ReadOnly = true;
+        grid.MultiSelect = false;
+        grid.AllowUserToAddRows = false;
+        grid.AllowUserToDeleteRows = false;
+        grid.AllowUserToResizeRows = false;
+        grid.AllowUserToResizeColumns = false;
+        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        grid.ScrollBars = ScrollBars.Vertical;
+
+        grid.ColumnHeadersDefaultCellStyle.BackColor = ColorSidebar;
+        grid.ColumnHeadersDefaultCellStyle.ForeColor = ColorMuted;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = ColorSidebar;
+        grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = ColorMuted;
+        grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+
+        grid.DefaultCellStyle.BackColor = ColorCard;
+        grid.DefaultCellStyle.ForeColor = ColorText;
+        grid.DefaultCellStyle.SelectionBackColor = ColorHover;
+        grid.DefaultCellStyle.SelectionForeColor = ColorText;
+        grid.DefaultCellStyle.Font = new Font("Segoe UI", 9.75f);
+    }
+
+    private void AddColumn(DataGridView grid, string title, float weight)
+    {
+        int index = grid.Columns.Add(title, title);
+        grid.Columns[index].FillWeight = weight;
+        grid.Columns[index].SortMode = DataGridViewColumnSortMode.NotSortable;
+    }
+
+    private void AddPage(Panel page, string title)
+    {
+        page.Location = new Point(SidebarWidth, 0);
+        page.Size = new Size(PageWidth, ClientSize.Height);
+        page.BackColor = ColorWindow;
+        page.Visible = false;
+        page.Controls.Add(MakeLabel(title, PageMargin, 22, ContentWidth, 36, 18f, FontStyle.Bold, ColorText));
+        pages.Add(page);
+        Controls.Add(page);
+    }
+
+    private void ShowPage(Panel page)
+    {
+        for (int i = 0; i < pages.Count; i++)
+        {
+            bool active = pages[i] == page;
+            pages[i].Visible = active;
+            navButtons[i].BackColor = active ? ColorCard : ColorSidebar;
+            navButtons[i].ForeColor = active ? ColorAccent : ColorText;
+        }
+    }
+
+    private void BuildSidebar()
+    {
+        var sidebar = new Panel
+        {
+            Location = new Point(0, 0),
+            Size = new Size(SidebarWidth, ClientSize.Height),
+            BackColor = ColorSidebar
+        };
+
+        sidebar.Controls.Add(MakeLabel("BO1 RANKED", 20, 22, 170, 32, 15f, FontStyle.Bold, ColorAccent));
+        sidebar.Controls.Add(MakeLabel("Zombies 1v1 - race to round 30", 21, 54, 175, 18, 8f, FontStyle.Regular, ColorMuted));
+
+        string[] titles = { "PLAY", "LADDER", "PROFILE", "MOD FILES" };
+        Panel[] targets = { playPage, ladderPage, profilePage, modPage };
+        for (int i = 0; i < titles.Length; i++)
+        {
+            Panel target = targets[i];
+            var button = new Button
+            {
+                Text = "    " + titles[i],
+                Location = new Point(0, 96 + i * 46),
+                Size = new Size(SidebarWidth, 46),
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            StyleButton(button, ColorSidebar, ColorText, 10.5f, FontStyle.Bold);
+            button.FlatAppearance.MouseOverBackColor = ColorCard;
+            button.Click += async (s, e) =>
+            {
+                ShowPage(target);
+                if (target == ladderPage) await RefreshLadder();
+                if (target == profilePage) await RefreshProfile();
+            };
+            navButtons.Add(button);
+            sidebar.Controls.Add(button);
+        }
+
+        // Player card at the bottom.
+        sideNameLabel.Location = new Point(20, ClientSize.Height - 86);
+        sideNameLabel.Size = new Size(170, 22);
+        sideNameLabel.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
+        sideNameLabel.ForeColor = ColorText;
+        sideNameLabel.AutoEllipsis = true;
+
+        sideEloLabel.Location = new Point(20, ClientSize.Height - 62);
+        sideEloLabel.Size = new Size(170, 20);
+        sideEloLabel.Font = new Font("Segoe UI", 9f);
+        sideEloLabel.ForeColor = ColorMuted;
+        sideEloLabel.Text = "Elo -";
+
+        sidebar.Controls.Add(sideNameLabel);
+        sidebar.Controls.Add(sideEloLabel);
+        sidebar.Controls.Add(MakeLabel("v" + AppVersion.ToString(3), 20, ClientSize.Height - 34, 170, 18, 8f, FontStyle.Regular, ColorMuted));
+
+        Controls.Add(sidebar);
+    }
+
+    private void BuildPlayPage()
+    {
+        AddPage(playPage, "Play");
+
+        statusLabel.Location = new Point(PageMargin, 70);
+        statusLabel.Size = new Size(ContentWidth, 26);
+        statusLabel.Font = new Font("Segoe UI", 11.5f, FontStyle.Bold);
+        statusLabel.ForeColor = ColorText;
+        statusLabel.AutoEllipsis = true;
+        statusLabel.Text = "Ready";
+
+        searchButton.Text = "FIND MATCH";
+        searchButton.Location = new Point(PageMargin, 106);
+        searchButton.Size = new Size(ContentWidth, 60);
+        StyleButton(searchButton, ColorAccent, Color.White, 14f, FontStyle.Bold);
+        searchButton.Click += async (s, e) => await SearchClicked();
+
+        // Match card.
+        var card = new Panel
+        {
+            Location = new Point(PageMargin, 182),
+            Size = new Size(ContentWidth, 92),
+            BackColor = ColorCard
+        };
+        card.Controls.Add(MakeLabel("CURRENT MATCH", 16, 10, 300, 18, 8f, FontStyle.Bold, ColorMuted));
+
+        matchLabel.Location = new Point(16, 32);
+        matchLabel.Size = new Size(ContentWidth - 32, 24);
+        matchLabel.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
+        matchLabel.ForeColor = ColorText;
+        matchLabel.BackColor = Color.Transparent;
+        matchLabel.AutoEllipsis = true;
+        matchLabel.Text = "No match in progress";
+
+        opponentLabel.Location = new Point(16, 60);
+        opponentLabel.Size = new Size(ContentWidth - 32, 22);
+        opponentLabel.ForeColor = ColorMuted;
+        opponentLabel.BackColor = Color.Transparent;
+        opponentLabel.AutoEllipsis = true;
+
+        card.Controls.Add(matchLabel);
+        card.Controls.Add(opponentLabel);
+
+        testButton.Text = "Test mode (bot, round " + TestGoal + ")";
+        testButton.Location = new Point(PageMargin, 290);
+        testButton.Size = new Size(286, 36);
+        StyleButton(testButton, ColorCard, ColorText, 9.75f, FontStyle.Regular);
+        testButton.Click += (s, e) => StartTestMatch();
+
+        stopButton.Text = "Leave match";
+        stopButton.Location = new Point(PageMargin + 298, 290);
+        stopButton.Size = new Size(ContentWidth - 298, 36);
+        StyleButton(stopButton, ColorCard, ColorBad, 9.75f, FontStyle.Regular);
+        stopButton.Enabled = false;
+        stopButton.Click += async (s, e) => await StopClicked();
+
+        logBox.Location = new Point(PageMargin, 342);
+        logBox.Size = new Size(ContentWidth, 194);
+        logBox.IntegralHeight = false;
+        logBox.HorizontalScrollbar = true;
+        logBox.BorderStyle = BorderStyle.None;
+        logBox.BackColor = ColorSidebar;
+        logBox.ForeColor = ColorMuted;
+        logBox.Font = new Font("Consolas", 9f);
+
+        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, testButton, stopButton, logBox });
+    }
+
+    private void BuildLadderPage()
+    {
+        AddPage(ladderPage, "Ladder");
+
+        var refresh = new Button { Text = "Refresh", Location = new Point(PageMargin + ContentWidth - 110, 24), Size = new Size(110, 32) };
+        StyleButton(refresh, ColorCard, ColorText, 9.5f, FontStyle.Regular);
+        refresh.Click += async (s, e) => await RefreshLadder();
+
+        ladderStatusLabel.Location = new Point(PageMargin, 66);
+        ladderStatusLabel.Size = new Size(ContentWidth, 20);
+        ladderStatusLabel.ForeColor = ColorMuted;
+        ladderStatusLabel.Text = "Players appear here after their first ranked match.";
+
+        ladderGrid.Location = new Point(PageMargin, 94);
+        ladderGrid.Size = new Size(ContentWidth, 442);
+        StyleGrid(ladderGrid);
+        AddColumn(ladderGrid, "#", 12);
+        AddColumn(ladderGrid, "Player", 44);
+        AddColumn(ladderGrid, "Elo", 16);
+        AddColumn(ladderGrid, "W", 10);
+        AddColumn(ladderGrid, "L", 10);
+        AddColumn(ladderGrid, "Win %", 16);
+
+        ladderPage.Controls.AddRange(new Control[] { refresh, ladderStatusLabel, ladderGrid });
+        refresh.BringToFront();
+    }
+
+    private void BuildProfilePage()
+    {
+        AddPage(profilePage, "Profile");
+
+        profilePage.Controls.Add(MakeLabel("PLAYER NAME", PageMargin, 72, 300, 18, 8f, FontStyle.Bold, ColorMuted));
+
+        nameBox.Location = new Point(PageMargin, 94);
+        nameBox.Size = new Size(ContentWidth - 122, 28);
+        nameBox.MaxLength = 20;
+        nameBox.BorderStyle = BorderStyle.FixedSingle;
+        nameBox.BackColor = ColorCard;
+        nameBox.ForeColor = ColorText;
+        nameBox.Font = new Font("Segoe UI", 11f);
+
+        saveNameButton.Text = "Save";
+        saveNameButton.Location = new Point(PageMargin + ContentWidth - 110, 93);
+        saveNameButton.Size = new Size(110, 30);
+        StyleButton(saveNameButton, ColorAccent, Color.White, 9.5f, FontStyle.Bold);
+        saveNameButton.Click += async (s, e) => await SaveNameClicked();
+
+        profileHintLabel.Location = new Point(PageMargin, 128);
+        profileHintLabel.Size = new Size(ContentWidth, 20);
+        profileHintLabel.ForeColor = ColorMuted;
+        profileHintLabel.Text = "3 to 20 characters: letters, digits, space, - and _";
+
+        var card = new Panel
+        {
+            Location = new Point(PageMargin, 160),
+            Size = new Size(ContentWidth, 96),
+            BackColor = ColorCard
+        };
+        card.Controls.Add(MakeLabel("ELO", 16, 10, 100, 18, 8f, FontStyle.Bold, ColorMuted));
+
+        profileEloLabel.Location = new Point(14, 28);
+        profileEloLabel.Size = new Size(200, 56);
+        profileEloLabel.Font = new Font("Segoe UI", 30f, FontStyle.Bold);
+        profileEloLabel.ForeColor = ColorAccent;
+        profileEloLabel.BackColor = Color.Transparent;
+        profileEloLabel.Text = "-";
+
+        profileRecordLabel.Location = new Point(230, 34);
+        profileRecordLabel.Size = new Size(ContentWidth - 246, 48);
+        profileRecordLabel.Font = new Font("Segoe UI", 10.5f);
+        profileRecordLabel.ForeColor = ColorText;
+        profileRecordLabel.BackColor = Color.Transparent;
+        profileRecordLabel.Text = "No ranked match played yet";
+
+        card.Controls.Add(profileEloLabel);
+        card.Controls.Add(profileRecordLabel);
+
+        profilePage.Controls.Add(MakeLabel("LAST MATCHES", PageMargin, 272, 300, 18, 8f, FontStyle.Bold, ColorMuted));
+
+        historyGrid.Location = new Point(PageMargin, 296);
+        historyGrid.Size = new Size(ContentWidth, 240);
+        StyleGrid(historyGrid);
+        AddColumn(historyGrid, "Result", 16);
+        AddColumn(historyGrid, "Opponent", 34);
+        AddColumn(historyGrid, "Elo", 12);
+        AddColumn(historyGrid, "How", 22);
+        AddColumn(historyGrid, "Date", 20);
+
+        profilePage.Controls.AddRange(new Control[] { nameBox, saveNameButton, profileHintLabel, card, historyGrid });
+    }
+
+    private void BuildModPage()
+    {
+        AddPage(modPage, "Mod files");
+
+        modLabel.Location = new Point(PageMargin, 72);
+        modLabel.Size = new Size(ContentWidth, 26);
+        modLabel.Font = new Font("Segoe UI", 11.5f, FontStyle.Bold);
+
+        var info = MakeLabel(
+            "The mod replaces the game's box, power-up and dog round scripts with seeded versions, " +
+            "and adds a plugin that lets the game exchange files with this app.\n\n" +
+            "It stays active in all your solo Zombies games, shows Plutonium's checksums and a " +
+            "\"RANKED MOD ACTIVE\" banner, and must be uninstalled before any leaderboard run.",
+            PageMargin, 108, ContentWidth, 110, 9.75f, FontStyle.Regular, ColorMuted);
+        info.AutoEllipsis = false;
+
+        installButton.Text = "Install mod files";
+        installButton.Location = new Point(PageMargin, 232);
+        installButton.Size = new Size(286, 40);
+        StyleButton(installButton, ColorAccent, Color.White, 10f, FontStyle.Bold);
+        installButton.Click += async (s, e) => await InstallClicked();
+
+        uninstallButton.Text = "Uninstall mod files";
+        uninstallButton.Location = new Point(PageMargin + 298, 232);
+        uninstallButton.Size = new Size(ContentWidth - 298, 40);
+        StyleButton(uninstallButton, ColorCard, ColorText, 10f, FontStyle.Regular);
+        uninstallButton.Click += (s, e) => UninstallClicked();
+
+        modPage.Controls.AddRange(new Control[] { modLabel, info, installButton, uninstallButton });
+    }
+
+    // ------------------------------------------------------------------ ladder and profile (read from the server's web pages)
+
+    private async Task RefreshLadder()
+    {
+        ladderStatusLabel.Text = "Loading (the server can take up to a minute to wake up)...";
+        try
+        {
+            string json = await web.GetStringAsync(ServerHttpUrl + "/ladder");
+            using (JsonDocument document = JsonDocument.Parse(json))
+            {
+                ladderGrid.Rows.Clear();
+                foreach (JsonElement row in document.RootElement.EnumerateArray())
+                {
+                    int wins = row.GetProperty("wins").GetInt32();
+                    int losses = row.GetProperty("losses").GetInt32();
+                    string name = row.GetProperty("name").GetString();
+                    int index = ladderGrid.Rows.Add(
+                        row.GetProperty("rank").GetInt32(), name, row.GetProperty("elo").GetInt32(),
+                        wins, losses, WinRate(wins, losses));
+
+                    if (string.Equals(name, playerName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ladderGrid.Rows[index].DefaultCellStyle.ForeColor = ColorAccent;
+                        ladderGrid.Rows[index].DefaultCellStyle.SelectionForeColor = ColorAccent;
+                    }
+                }
+                ladderGrid.ClearSelection();
+                ladderStatusLabel.Text = ladderGrid.Rows.Count == 0
+                    ? "No ranked match has been played yet."
+                    : ladderGrid.Rows.Count + " ranked player(s)";
+            }
+        }
+        catch (Exception)
+        {
+            ladderStatusLabel.Text = "Could not load the ladder - try Refresh in a minute.";
+        }
+    }
+
+    private async Task RefreshProfile()
+    {
+        if (playerName == "") return;
+
+        try
+        {
+            HttpResponseMessage response = await web.GetAsync(ServerHttpUrl + "/player?name=" + Uri.EscapeDataString(playerName));
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Name not registered yet: the account is created on the first "Find match".
+                historyGrid.Rows.Clear();
+                return;
+            }
+            response.EnsureSuccessStatusCode();
+
+            using (JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync()))
+            {
+                JsonElement root = document.RootElement;
+                ShowStats(root.GetProperty("elo").GetInt32(), root.GetProperty("wins").GetInt32(),
+                    root.GetProperty("losses").GetInt32(), root.GetProperty("rank").GetInt32());
+
+                historyGrid.Rows.Clear();
+                foreach (JsonElement match in root.GetProperty("matches").EnumerateArray())
+                {
+                    string winner = match.GetProperty("winner").GetString();
+                    bool won = string.Equals(winner, root.GetProperty("name").GetString(), StringComparison.OrdinalIgnoreCase);
+                    int delta = match.GetProperty("delta").GetInt32();
+                    string reason = match.GetProperty("reason").GetString();
+                    string how = reason == "finished" ? "Round 30 in " + FormatTime(match.GetProperty("timeMs").GetInt32().ToString())
+                        : reason == "left" ? "Opponent left" : "Death / surrender";
+                    if (!won && reason == "left") how = "Left the match";
+
+                    string date = "";
+                    DateTime played;
+                    if (DateTime.TryParse(match.GetProperty("playedAt").GetString(), out played))
+                    {
+                        date = played.ToLocalTime().ToString("dd MMM HH:mm");
+                    }
+
+                    int index = historyGrid.Rows.Add(
+                        won ? "WIN" : "LOSS",
+                        won ? match.GetProperty("loser").GetString() : winner,
+                        (won ? "+" : "-") + delta, how, date);
+                    historyGrid.Rows[index].Cells[0].Style.ForeColor = won ? ColorGood : ColorBad;
+                    historyGrid.Rows[index].Cells[0].Style.SelectionForeColor = won ? ColorGood : ColorBad;
+                }
+                historyGrid.ClearSelection();
+            }
+        }
+        catch (Exception)
+        {
+            // Server asleep or offline: the profile simply keeps its last values.
+        }
+    }
+
+    private void ShowStats(int elo, int wins, int losses, int rank)
+    {
+        profileEloLabel.Text = elo.ToString();
+        sideEloLabel.Text = "Elo " + elo;
+        profileRecordLabel.Text = wins + losses == 0
+            ? "No ranked match played yet"
+            : wins + " W  -  " + losses + " L   (" + WinRate(wins, losses) + ")\nRank #" + rank;
+    }
+
+    private static string WinRate(int wins, int losses)
+    {
+        return wins + losses == 0 ? "-" : (100 * wins / (wins + losses)) + " %";
+    }
+
+    private static string CleanName(string text)
+    {
+        string kept = Regex.Replace(text ?? "", "[^A-Za-z0-9 _-]", "");
+        kept = Regex.Replace(kept, "\\s+", " ").Trim();
+        return kept.Length > 20 ? kept.Substring(0, 20).Trim() : kept;
+    }
+
+    private async Task SaveNameClicked()
+    {
+        if (inMatch || socket != null)
+        {
+            profileHintLabel.ForeColor = ColorWarn;
+            profileHintLabel.Text = "You cannot change your name during a search or a match.";
+            return;
+        }
+
+        string name = CleanName(nameBox.Text);
+        if (name.Length < 3)
+        {
+            profileHintLabel.ForeColor = ColorBad;
+            profileHintLabel.Text = "Name too short. 3 to 20 characters: letters, digits, space, - and _";
+            return;
+        }
+
+        nameBox.Text = name;
+        playerName = name;
+        sideNameLabel.Text = name;
+        SaveSettings();
+        profileHintLabel.ForeColor = ColorGood;
+        profileHintLabel.Text = "Saved. The name is reserved on the server at your next match search.";
+        await RefreshProfile();
+    }
+
+    // The secret key is created once and never shown. See identityPath.
+    private void LoadIdentity()
+    {
+        try
+        {
+            if (File.Exists(identityPath)) identityToken = File.ReadAllText(identityPath).Trim();
+            if (identityToken.Length < 32)
+            {
+                identityToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+                Directory.CreateDirectory(Path.GetDirectoryName(identityPath));
+                File.WriteAllText(identityPath, identityToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log("Could not read or create your player key: " + ex.Message);
+        }
     }
 
     // ------------------------------------------------------------------ self-update
@@ -236,19 +755,23 @@ public class MainForm : Form
 
     private void LoadSettings()
     {
-        nameBox.Text = Environment.UserName;
+        playerName = CleanName(Environment.UserName);
         try
         {
             if (File.Exists(settingsPath))
             {
                 string[] lines = File.ReadAllLines(settingsPath);
-                if (lines.Length > 0 && lines[0].Trim() != "") nameBox.Text = lines[0].Trim();
+                if (lines.Length > 0 && CleanName(lines[0]).Length >= 3) playerName = CleanName(lines[0]);
             }
         }
         catch (Exception ex)
         {
             Log("Could not read settings: " + ex.Message);
         }
+
+        if (playerName.Length < 3) playerName = "Player" + new Random().Next(1000, 10000);
+        nameBox.Text = playerName;
+        sideNameLabel.Text = playerName;
     }
 
     private void SaveSettings()
@@ -256,7 +779,7 @@ public class MainForm : Form
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
-            File.WriteAllLines(settingsPath, new[] { nameBox.Text.Trim() });
+            File.WriteAllLines(settingsPath, new[] { playerName });
         }
         catch
         {
@@ -315,19 +838,19 @@ public class MainForm : Form
         if (modInstalled)
         {
             modLabel.Text = "Mod files: installed";
-            modLabel.ForeColor = Color.FromArgb(0, 128, 0);
+            modLabel.ForeColor = ColorGood;
             installButton.Text = "Reinstall mod files";
         }
         else if (present > 0 || plugin)
         {
             modLabel.Text = "Mod files: update needed";
-            modLabel.ForeColor = Color.FromArgb(200, 110, 0);
+            modLabel.ForeColor = ColorWarn;
             installButton.Text = "Update mod files";
         }
         else
         {
             modLabel.Text = "Mod files: not installed";
-            modLabel.ForeColor = Color.FromArgb(190, 0, 0);
+            modLabel.ForeColor = ColorBad;
             installButton.Text = "Install mod files";
         }
         uninstallButton.Enabled = present > 0;
@@ -551,6 +1074,7 @@ public class MainForm : Form
         RefreshModStatus();
         if (modInstalled) return true;
 
+        ShowPage(modPage);
         MessageBox.Show(this,
             "The mod files are missing or out of date.\nClick \"" + installButton.Text + "\" first.",
             "BO1 Ranked", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -579,7 +1103,7 @@ public class MainForm : Form
         testButton.Enabled = false;
         installButton.Enabled = false;
         uninstallButton.Enabled = false;
-        searchButton.Text = "Cancel search";
+        searchButton.Text = "CANCEL SEARCH";
         SetStatus("Connecting to the server (can take up to a minute)...");
 
         try
@@ -599,9 +1123,7 @@ public class MainForm : Form
 
         _ = ReceiveLoop(socket, socketCancel.Token);
 
-        string name = nameBox.Text.Replace(";", "").Trim();
-        if (name == "") name = "Player";
-        await SendLine("HELLO;" + name + ";" + AppVersion.ToString(3));
+        await SendLine("HELLO;" + playerName + ";" + AppVersion.ToString(3) + ";" + identityToken);
         await SendLine("QUEUE");
     }
 
@@ -613,7 +1135,7 @@ public class MainForm : Form
         testMode = true;
         testBotRunning = false;
         testBotFinished = false;
-        BeginMatch(new Random().Next(1, 1000000), TestGoal, "Test bot");
+        BeginMatch(new Random().Next(1, 1000000), TestGoal, "Test bot", 0);
     }
 
     private async Task StopClicked()
@@ -628,7 +1150,7 @@ public class MainForm : Form
     private void SetIdleButtons()
     {
         searchButton.Enabled = true;
-        searchButton.Text = "Find a match";
+        searchButton.Text = "FIND MATCH";
         testButton.Enabled = true;
         stopButton.Enabled = false;
         installButton.Enabled = true;
@@ -637,7 +1159,7 @@ public class MainForm : Form
 
     // ------------------------------------------------------------------ match flow
 
-    private void BeginMatch(int seed, int goal, string opponentName)
+    private void BeginMatch(int seed, int goal, string opponentName, int opponentElo)
     {
         inMatch = true;
         matchSeed = seed;
@@ -665,15 +1187,17 @@ public class MainForm : Form
         }
 
         searchButton.Enabled = false;
-        searchButton.Text = "Find a match";
+        searchButton.Text = "MATCH IN PROGRESS";
         testButton.Enabled = false;
         installButton.Enabled = false;
         uninstallButton.Enabled = false;
         stopButton.Enabled = true;
 
         SetStatus("Match found: start Kino (solo), then ready up in game");
-        matchLabel.Text = "Opponent: " + opponentName + "   |   seed " + seed + "   |   goal: round " + goal;
-        opponentLabel.Text = "";
+        matchLabel.Text = "vs " + opponentName + (opponentElo > 0 ? "  (" + opponentElo + " Elo)" : "")
+            + "     seed " + seed + "     goal: round " + goal;
+        opponentLabel.Text = "Waiting for both players to ready up in game";
+        ShowPage(playPage);
         Log("Match vs " + opponentName + ", seed " + seed);
 
         pollTimer.Start();
@@ -690,6 +1214,8 @@ public class MainForm : Form
         SetIdleButtons();
         SetStatus(status);
         Log(status);
+        matchLabel.Text = "No match in progress";
+        opponentLabel.Text = "Last result: " + status;
     }
 
     private async Task PollTick()
@@ -1002,6 +1528,18 @@ public class MainForm : Form
         {
             case "WELCOME":
                 Log("Connected to the server (" + (f.Length > 1 ? f[1] : "?") + " player(s) online)");
+                if (f.Length >= 6) ShowStats(ParseInt(f[2]), ParseInt(f[3]), ParseInt(f[4]), ParseInt(f[5]));
+                break;
+
+            case "NAMETAKEN":
+            case "NAMEINVALID":
+                await Disconnect();
+                SetIdleButtons();
+                SetStatus(f[0] == "NAMETAKEN"
+                    ? "The name \"" + playerName + "\" is already taken - pick another one"
+                    : "Invalid name - pick another one");
+                Log("Search stopped: change your name in the Profile page");
+                ShowPage(profilePage);
                 break;
 
             case "WAITING":
@@ -1012,7 +1550,7 @@ public class MainForm : Form
                 if (f.Length >= 4)
                 {
                     testMode = false;
-                    BeginMatch(ParseInt(f[1]), ParseInt(f[2]), f[3]);
+                    BeginMatch(ParseInt(f[1]), ParseInt(f[2]), f[3], f.Length >= 5 ? ParseInt(f[4]) : 0);
                 }
                 break;
 
@@ -1030,36 +1568,44 @@ public class MainForm : Form
             case "RESULT":
                 if (inMatch && f.Length >= 4)
                 {
+                    // Elo change, when the server sent it.
+                    string elo = "";
+                    if (f.Length >= 6)
+                    {
+                        int delta = ParseSigned(f[5]);
+                        elo = "   (" + (delta >= 0 ? "+" : "") + delta + " Elo, now " + f[4] + ")";
+                    }
+
                     // A time of 0 means the match ended by a death or a surrender, not by reaching the goal.
                     if (f[1] == "WIN" && f[2] == "0")
                     {
                         ShowOpponent(lastOpponentRound, "none", 0, 2);
                         FlushOpponentFile();
-                        EndMatch("VICTORY: your opponent died or surrendered");
+                        EndMatch("VICTORY: your opponent is out" + elo);
                     }
                     else if (f[1] == "WIN")
                     {
-                        EndMatch("VICTORY in " + FormatTime(f[2]));
+                        EndMatch("VICTORY in " + FormatTime(f[2]) + elo);
                     }
                     else if (f[3] == "0")
                     {
-                        EndMatch("DEFEAT: you died or surrendered");
+                        EndMatch("DEFEAT: you are out" + elo);
                     }
                     else
                     {
                         FlushOpponentFile();
-                        EndMatch("DEFEAT: opponent finished in " + FormatTime(f[3]));
+                        EndMatch("DEFEAT: opponent finished in " + FormatTime(f[3]) + elo);
                     }
                     await Disconnect();
+                    await RefreshProfile();
                 }
                 break;
 
             case "OPPLEFT":
                 if (inMatch)
                 {
-                    ShowOpponent(lastOpponentRound, "none", 0, 2);
-                    FlushOpponentFile();
-                    EndMatch("VICTORY by forfeit: opponent left");
+                    // Only sent when the opponent leaves before the start: no winner, no Elo change.
+                    EndMatch("Match cancelled: your opponent left before the start");
                     await Disconnect();
                 }
                 break;
@@ -1076,6 +1622,13 @@ public class MainForm : Form
     {
         int value;
         return int.TryParse(text, out value) ? value : 0;
+    }
+
+    private static int ParseSigned(string text)
+    {
+        int value;
+        return int.TryParse(text, System.Globalization.NumberStyles.AllowLeadingSign,
+            System.Globalization.CultureInfo.InvariantCulture, out value) ? value : 0;
     }
 
     private static string FormatTime(string milliseconds)
