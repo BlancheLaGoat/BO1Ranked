@@ -582,6 +582,8 @@ public class MainForm : Form
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 // Name not registered yet: the account is created on the first "Find match".
+                // Every new account starts at 1000, so that is what is shown meanwhile.
+                ShowStats(1000, 0, 0, 0);
                 historyGrid.Rows.Clear();
                 return;
             }
