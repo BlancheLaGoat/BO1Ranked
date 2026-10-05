@@ -753,8 +753,16 @@ public class MainForm : Form
     private async Task CheckForUpdate()
     {
         string exePath = Environment.ProcessPath;
-        if (exePath == null || Path.GetFileName(exePath) != ExeName) return;
-        if (exePath.Contains(@"\bin\")) return;      // started from source (Run-Dev.bat): never self-replace
+        if (exePath == null) return;
+
+        // Started from source (Run-Dev.bat): never self-replace. Any other exe updates itself in place,
+        // whatever its file name ("BO1Ranked (1).exe" after a second download, for example).
+        string exeFile = Path.GetFileName(exePath);
+        if (exePath.Contains(@"\bin\") || exeFile.Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            Log("Update check skipped (running from source)");
+            return;
+        }
 
         try { File.Delete(exePath + ".old"); } catch { }
 
@@ -792,12 +800,20 @@ public class MainForm : Form
                     // A test version published by mistake as a normal release must never reach everyone.
                     if (tag != null && tag.Contains("-beta")) tag = null;
                 }
-                if (tag == null || !IsVersion(tag)) return;
+                if (tag == null || !IsVersion(tag))
+                {
+                    Log("Update check: no published version found");
+                    return;
+                }
 
                 // Newer version, or leaving the beta channel: back to the latest normal release.
                 bool newer = CompareVersions(tag, AppVersionText) > 0;
                 bool leavingBeta = !betaChannel && IsBetaBuild;
-                if (!newer && !leavingBeta) return;
+                if (!newer && !leavingBeta)
+                {
+                    Log("Up to date (" + (betaChannel ? "beta" : "normal") + " channel, newest is " + tag + ")");
+                    return;
+                }
                 string latest = tag.TrimStart('v');
                 if (inMatch || socket != null) return;      // never restart in the middle of a search or a match
 
