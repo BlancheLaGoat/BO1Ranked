@@ -95,6 +95,7 @@ public class MainForm : Form
     private readonly Button uninstallButton = new Button();
     private readonly Button searchButton = new Button();
     private readonly Button testButton = new Button();
+    private readonly Button practiceButton = new Button();
     private readonly Button stopButton = new Button();
     private readonly Label statusLabel = new Label();
     private readonly Label matchLabel = new Label();
@@ -143,6 +144,7 @@ public class MainForm : Form
     private bool testBotFinished;
     private bool readySent;                  // this player pressed "ready" in game and the server knows
     private bool goGiven;                    // go.txt written: the countdown is running or the race is on
+    private bool practiceMatch;              // online practice against the server's bot: Elo is not touched
     private bool lostSent;                   // this player died or surrendered and the server knows
     private bool pauseSent;                  // the opponent has been told this game is paused
     private string lastRawState = "";
@@ -415,15 +417,26 @@ public class MainForm : Form
         card.Controls.Add(matchLabel);
         card.Controls.Add(opponentLabel);
 
-        testButton.Text = "Test mode (bot, round " + TestGoal + ")";
-        testButton.Location = new Point(PageMargin, 290);
-        testButton.Size = new Size(286, 36);
-        StyleButton(testButton, ColorCard, ColorText, 9.75f, FontStyle.Regular);
+        // Two ways to try the mod alone, both against a bot and to round 3:
+        //   online practice  the server plays the opponent, through the same path as a real match
+        //   local test       nothing leaves this PC, works without the server
+        int third = (ContentWidth - 20) / 3;
+
+        practiceButton.Text = "Online practice (bot)";
+        practiceButton.Location = new Point(PageMargin, 290);
+        practiceButton.Size = new Size(third, 36);
+        StyleButton(practiceButton, ColorCard, ColorText, 9.5f, FontStyle.Regular);
+        practiceButton.Click += async (s, e) => await PracticeClicked();
+
+        testButton.Text = "Local test (bot)";
+        testButton.Location = new Point(PageMargin + third + 10, 290);
+        testButton.Size = new Size(third, 36);
+        StyleButton(testButton, ColorCard, ColorText, 9.5f, FontStyle.Regular);
         testButton.Click += (s, e) => StartTestMatch();
 
         stopButton.Text = "Leave match";
-        stopButton.Location = new Point(PageMargin + 298, 290);
-        stopButton.Size = new Size(ContentWidth - 298, 36);
+        stopButton.Location = new Point(PageMargin + 2 * (third + 10), 290);
+        stopButton.Size = new Size(ContentWidth - 2 * (third + 10), 36);
         StyleButton(stopButton, ColorCard, ColorBad, 9.75f, FontStyle.Regular);
         stopButton.Enabled = false;
         stopButton.Click += async (s, e) => await StopClicked();
@@ -437,7 +450,7 @@ public class MainForm : Form
         logBox.ForeColor = ColorMuted;
         logBox.Font = new Font("Consolas", 9f);
 
-        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, testButton, stopButton, logBox });
+        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, practiceButton, testButton, stopButton, logBox });
     }
 
     private void BuildLadderPage()
@@ -1252,11 +1265,30 @@ public class MainForm : Form
 
         if (!RequireMod()) return;
 
+        practiceMatch = false;
+        searchButton.Text = "CANCEL SEARCH";
+        await ConnectAndSend("QUEUE");
+    }
+
+    private async Task PracticeClicked()
+    {
+        if (inMatch || socket != null) return;
+        if (!RequireMod()) return;
+
+        practiceMatch = true;
+        searchButton.Enabled = false;
+        await ConnectAndSend("PRACTICE");
+    }
+
+    // Opens the connection, identifies the player, then sends the first request:
+    // QUEUE for a ranked search, PRACTICE for a match against the server's bot.
+    private async Task ConnectAndSend(string request)
+    {
         SaveSettings();
         testButton.Enabled = false;
+        practiceButton.Enabled = false;
         installButton.Enabled = false;
         uninstallButton.Enabled = false;
-        searchButton.Text = "CANCEL SEARCH";
         SetStatus("Connecting to the server (can take up to a minute)...");
 
         try
@@ -1277,7 +1309,7 @@ public class MainForm : Form
         _ = ReceiveLoop(socket, socketCancel.Token);
 
         await SendLine("HELLO;" + playerName + ";" + AppVersionText + ";" + identityToken);
-        await SendLine("QUEUE");
+        await SendLine(request);
     }
 
     private void StartTestMatch()
@@ -1285,6 +1317,7 @@ public class MainForm : Form
         if (inMatch || socket != null) return;
         if (!RequireMod()) return;
 
+        practiceMatch = false;
         testMode = true;
         testBotRunning = false;
         testBotFinished = false;
@@ -1305,6 +1338,7 @@ public class MainForm : Form
         searchButton.Enabled = true;
         searchButton.Text = "FIND MATCH";
         testButton.Enabled = true;
+        practiceButton.Enabled = true;
         stopButton.Enabled = false;
         installButton.Enabled = true;
         RefreshModStatus();
@@ -1341,8 +1375,9 @@ public class MainForm : Form
         }
 
         searchButton.Enabled = false;
-        searchButton.Text = "MATCH IN PROGRESS";
+        searchButton.Text = practiceMatch ? "PRACTICE IN PROGRESS" : "MATCH IN PROGRESS";
         testButton.Enabled = false;
+        practiceButton.Enabled = false;
         installButton.Enabled = false;
         uninstallButton.Enabled = false;
         stopButton.Enabled = true;
@@ -1748,7 +1783,11 @@ public class MainForm : Form
                 {
                     // Elo change, when the server sent it.
                     string elo = "";
-                    if (f.Length >= 6)
+                    if (practiceMatch)
+                    {
+                        elo = "   (practice, Elo unchanged)";
+                    }
+                    else if (f.Length >= 6)
                     {
                         int delta = ParseSigned(f[5]);
                         elo = "   (" + (delta >= 0 ? "+" : "") + delta + " Elo, now " + f[4] + ")";
