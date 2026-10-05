@@ -40,6 +40,19 @@ public class MainForm : Form
     private const string ExeName = "BO1Ranked.exe";
 
     private static readonly Version AppVersion = Assembly.GetExecutingAssembly().GetName().Version;
+
+    // Full version text: "0.8.0" for a normal release, "0.8.0-beta.1" for a test version. It is the tag
+    // the exe was built from. Beta builds play on a separate beta ladder and only meet other beta builds.
+    private static readonly string AppVersionText = ReadVersionText();
+    private static readonly bool IsBetaBuild = AppVersionText.Contains("-beta");
+
+    private static string ReadVersionText()
+    {
+        var attribute = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+        string text = attribute != null ? attribute.InformationalVersion : AppVersion.ToString(3);
+        int plus = text.IndexOf('+');       // the build adds "+commit" after the version
+        return plus >= 0 ? text.Substring(0, plus) : text;
+    }
     private const string PluginUrl = "https://github.com/fedddddd/t5-gsc-utils/releases/latest/download/t5-gsc-utils.dll";
     private const string PluginFile = "t5-gsc-utils.dll";
     private const string BackupSuffix = ".before-bo1ranked";
@@ -103,6 +116,8 @@ public class MainForm : Form
     private readonly Label ladderStatusLabel = new Label();
     private readonly DataGridView ladderGrid = new DataGridView();
     private readonly Button saveNameButton = new Button();
+    private readonly CheckBox betaBox = new CheckBox();
+    private bool betaChannel;
     private readonly Label profileEloLabel = new Label();
     private readonly Label profileRecordLabel = new Label();
     private readonly Label profileHintLabel = new Label();
@@ -136,7 +151,7 @@ public class MainForm : Form
 
     public MainForm()
     {
-        Text = "BO1 Ranked v" + AppVersion.ToString(3);
+        Text = "BO1 Ranked v" + AppVersionText;
         AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -309,7 +324,9 @@ public class MainForm : Form
         };
 
         sidebar.Controls.Add(MakeLabel("BO1 RANKED", 18, 20, 180, 34, 14f, FontStyle.Bold, ColorAccent));
-        sidebar.Controls.Add(MakeLabel("Zombies 1v1", 20, 54, 178, 18, 8.5f, FontStyle.Regular, ColorMuted));
+        sidebar.Controls.Add(IsBetaBuild
+            ? MakeLabel("BETA BUILD", 20, 54, 178, 18, 8.5f, FontStyle.Bold, ColorWarn)
+            : MakeLabel("Zombies 1v1", 20, 54, 178, 18, 8.5f, FontStyle.Regular, ColorMuted));
 
         string[] titles = { "PLAY", "LADDER", "PROFILE", "MOD FILES" };
         Panel[] targets = { playPage, ladderPage, profilePage, modPage };
@@ -350,7 +367,7 @@ public class MainForm : Form
 
         sidebar.Controls.Add(sideNameLabel);
         sidebar.Controls.Add(sideEloLabel);
-        sidebar.Controls.Add(MakeLabel("v" + AppVersion.ToString(3), 20, ClientSize.Height - 34, 170, 18, 8f, FontStyle.Regular, ColorMuted));
+        sidebar.Controls.Add(MakeLabel("v" + AppVersionText, 20, ClientSize.Height - 34, 170, 18, 8f, FontStyle.Regular, ColorMuted));
 
         Controls.Add(sidebar);
     }
@@ -425,7 +442,7 @@ public class MainForm : Form
 
     private void BuildLadderPage()
     {
-        AddPage(ladderPage, "Ladder");
+        AddPage(ladderPage, IsBetaBuild ? "Ladder (beta)" : "Ladder");
 
         var refresh = new Button { Text = "Refresh", Location = new Point(PageMargin + ContentWidth - 110, 24), Size = new Size(110, 32) };
         StyleButton(refresh, ColorCard, ColorText, 9.5f, FontStyle.Regular);
@@ -542,7 +559,29 @@ public class MainForm : Form
         StyleButton(uninstallButton, ColorCard, ColorText, 10f, FontStyle.Regular);
         uninstallButton.Click += (s, e) => UninstallClicked();
 
-        modPage.Controls.AddRange(new Control[] { modLabel, info, installButton, uninstallButton });
+        modPage.Controls.Add(MakeLabel("UPDATES", PageMargin, 304, 300, 18, 8f, FontStyle.Bold, ColorMuted));
+
+        betaBox.Text = "Beta channel: receive test versions early";
+        betaBox.Location = new Point(PageMargin, 326);
+        betaBox.Size = new Size(ContentWidth, 26);
+        betaBox.ForeColor = ColorText;
+        betaBox.BackColor = ColorWindow;
+        betaBox.FlatStyle = FlatStyle.Flat;
+        betaBox.CheckedChanged += async (s, e) =>
+        {
+            if (betaChannel == betaBox.Checked) return;     // set by LoadSettings, not by the player
+            betaChannel = betaBox.Checked;
+            SaveSettings();
+            await CheckForUpdate();
+        };
+
+        var betaInfo = MakeLabel(
+            "Test versions have their own ladder and only meet other test versions, so nothing done in a " +
+            "beta counts on the real ladder. Untick to go back to the normal version.",
+            PageMargin, 354, ContentWidth, 60, 9.75f, FontStyle.Regular, ColorMuted);
+        betaInfo.AutoEllipsis = false;
+
+        modPage.Controls.AddRange(new Control[] { modLabel, info, installButton, uninstallButton, betaBox, betaInfo });
     }
 
     // ------------------------------------------------------------------ ladder and profile (read from the server's web pages)
@@ -552,7 +591,7 @@ public class MainForm : Form
         ladderStatusLabel.Text = "Loading (the server can take up to a minute to wake up)...";
         try
         {
-            string json = await web.GetStringAsync(ServerHttpUrl + "/ladder");
+            string json = await web.GetStringAsync(ServerHttpUrl + "/ladder" + (IsBetaBuild ? "?beta=1" : ""));
             using (JsonDocument document = JsonDocument.Parse(json))
             {
                 ladderGrid.Rows.Clear();
@@ -589,7 +628,7 @@ public class MainForm : Form
 
         try
         {
-            HttpResponseMessage response = await web.GetAsync(ServerHttpUrl + "/player?name=" + Uri.EscapeDataString(playerName));
+            HttpResponseMessage response = await web.GetAsync(ServerHttpUrl + "/player?name=" + Uri.EscapeDataString(playerName) + (IsBetaBuild ? "&beta=1" : ""));
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 // Name not registered yet: the account is created on the first "Find match".
@@ -726,12 +765,40 @@ public class MainForm : Form
                 http.Timeout = TimeSpan.FromSeconds(120);
                 http.DefaultRequestHeaders.UserAgent.ParseAdd("BO1Ranked");
 
-                string json = await http.GetStringAsync("https://api.github.com/repos/" + UpdateRepo + "/releases/latest");
-                Match tag = Regex.Match(json, "\"tag_name\"\\s*:\\s*\"v?([0-9]+(\\.[0-9]+){1,3})\"");
-                if (!tag.Success) return;
+                // Normal channel: the latest normal release. Beta channel: the newest release of all,
+                // test versions (GitHub "pre-releases", tagged like v0.8.0-beta.1) included.
+                string tag = null;
+                if (betaChannel)
+                {
+                    string list = await http.GetStringAsync("https://api.github.com/repos/" + UpdateRepo + "/releases?per_page=20");
+                    using (JsonDocument document = JsonDocument.Parse(list))
+                    {
+                        foreach (JsonElement release in document.RootElement.EnumerateArray())
+                        {
+                            if (release.GetProperty("draft").GetBoolean()) continue;
+                            string candidate = release.GetProperty("tag_name").GetString();
+                            if (!IsVersion(candidate)) continue;
+                            if (tag == null || CompareVersions(candidate, tag) > 0) tag = candidate;
+                        }
+                    }
+                }
+                else
+                {
+                    string one = await http.GetStringAsync("https://api.github.com/repos/" + UpdateRepo + "/releases/latest");
+                    using (JsonDocument document = JsonDocument.Parse(one))
+                    {
+                        tag = document.RootElement.GetProperty("tag_name").GetString();
+                    }
+                    // A test version published by mistake as a normal release must never reach everyone.
+                    if (tag != null && tag.Contains("-beta")) tag = null;
+                }
+                if (tag == null || !IsVersion(tag)) return;
 
-                Version latest = Version.Parse(tag.Groups[1].Value);
-                if (latest <= AppVersion) return;
+                // Newer version, or leaving the beta channel: back to the latest normal release.
+                bool newer = CompareVersions(tag, AppVersionText) > 0;
+                bool leavingBeta = !betaChannel && IsBetaBuild;
+                if (!newer && !leavingBeta) return;
+                string latest = tag.TrimStart('v');
                 if (inMatch || socket != null) return;      // never restart in the middle of a search or a match
 
                 SetStatus("Updating to v" + latest + "...");
@@ -742,7 +809,7 @@ public class MainForm : Form
                 uninstallButton.Enabled = false;
 
                 byte[] exe = await http.GetByteArrayAsync(
-                    "https://github.com/" + UpdateRepo + "/releases/latest/download/" + ExeName);
+                    "https://github.com/" + UpdateRepo + "/releases/download/" + tag + "/" + ExeName);
                 if (exe.Length < 1000000 || exe[0] != (byte)'M' || exe[1] != (byte)'Z')
                 {
                     throw new InvalidOperationException("the downloaded file is not a valid exe");
@@ -764,10 +831,40 @@ public class MainForm : Form
         }
     }
 
+    private static readonly Regex VersionPattern = new Regex("^v?([0-9]+)\\.([0-9]+)(\\.([0-9]+))?(-beta\\.?([0-9]*))?$");
+
+    private static bool IsVersion(string text)
+    {
+        return text != null && VersionPattern.IsMatch(text);
+    }
+
+    // Orders two version texts. A normal release is newer than its own test versions:
+    // 0.8.0-beta.1 < 0.8.0-beta.2 < 0.8.0 < 0.8.1-beta.1
+    private static int CompareVersions(string a, string b)
+    {
+        Match x = VersionPattern.Match(a ?? "");
+        Match y = VersionPattern.Match(b ?? "");
+        if (!x.Success || !y.Success) return 0;
+
+        for (int group = 1; group <= 4; group++)
+        {
+            if (group == 3) continue;       // group 3 is the ".patch" text, group 4 its number
+            int left = ParseInt(x.Groups[group].Value);
+            int right = ParseInt(y.Groups[group].Value);
+            if (left != right) return left.CompareTo(right);
+        }
+
+        // Same numbers: no "-beta" beats "-beta", then the higher beta number wins.
+        int betaLeft = x.Groups[5].Success ? ParseInt(x.Groups[6].Value) : int.MaxValue;
+        int betaRight = y.Groups[5].Success ? ParseInt(y.Groups[6].Value) : int.MaxValue;
+        return betaLeft.CompareTo(betaRight);
+    }
+
     // ------------------------------------------------------------------ settings
 
     private void LoadSettings()
     {
+        string betaChannelSaved = "";
         playerName = CleanName(Environment.UserName);
         try
         {
@@ -775,6 +872,7 @@ public class MainForm : Form
             {
                 string[] lines = File.ReadAllLines(settingsPath);
                 if (lines.Length > 0 && CleanName(lines[0]).Length >= 3) playerName = CleanName(lines[0]);
+                if (lines.Length > 1) betaChannelSaved = lines[1].Trim();
             }
         }
         catch (Exception ex)
@@ -785,6 +883,11 @@ public class MainForm : Form
         if (playerName.Length < 3) playerName = "Player" + new Random().Next(1000, 10000);
         nameBox.Text = playerName;
         sideNameLabel.Text = playerName;
+
+        // No choice saved yet: someone who downloaded a test version by hand stays on the beta channel,
+        // otherwise the app would put the normal version back at its first start.
+        betaChannel = betaChannelSaved == "" ? IsBetaBuild : betaChannelSaved == "beta=1";
+        betaBox.Checked = betaChannel;
     }
 
     private void SaveSettings()
@@ -792,7 +895,7 @@ public class MainForm : Form
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
-            File.WriteAllLines(settingsPath, new[] { playerName });
+            File.WriteAllLines(settingsPath, new[] { playerName, betaChannel ? "beta=1" : "beta=0" });
         }
         catch
         {
@@ -1157,7 +1260,7 @@ public class MainForm : Form
 
         _ = ReceiveLoop(socket, socketCancel.Token);
 
-        await SendLine("HELLO;" + playerName + ";" + AppVersion.ToString(3) + ";" + identityToken);
+        await SendLine("HELLO;" + playerName + ";" + AppVersionText + ";" + identityToken);
         await SendLine("QUEUE");
     }
 
@@ -1578,6 +1681,13 @@ public class MainForm : Form
             case "WELCOME":
                 Log("Connected to the server (" + (f.Length > 1 ? f[1] : "?") + " player(s) online)");
                 if (f.Length >= 6) ShowStats(ParseInt(f[2]), ParseInt(f[3]), ParseInt(f[4]), ParseInt(f[5]));
+                break;
+
+            case "BANNED":
+                await Disconnect();
+                SetIdleButtons();
+                SetStatus("This account is banned from ranked play");
+                Log("Search stopped: this account has been banned by an administrator");
                 break;
 
             case "NAMETAKEN":
