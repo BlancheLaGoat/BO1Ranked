@@ -544,25 +544,25 @@ public class MainForm : Form
             "and adds a plugin that lets the game exchange files with this app.\n\n" +
             "It stays active in all your solo Zombies games, shows Plutonium's checksums and a " +
             "\"RANKED MOD ACTIVE\" banner, and must be uninstalled before any leaderboard run.",
-            PageMargin, 108, ContentWidth, 110, 9.75f, FontStyle.Regular, ColorMuted);
+            PageMargin, 108, ContentWidth, 170, 9.75f, FontStyle.Regular, ColorMuted);
         info.AutoEllipsis = false;
 
         installButton.Text = "Install mod files";
-        installButton.Location = new Point(PageMargin, 232);
+        installButton.Location = new Point(PageMargin, 292);
         installButton.Size = new Size(286, 40);
         StyleButton(installButton, ColorAccent, Color.White, 10f, FontStyle.Bold);
         installButton.Click += async (s, e) => await InstallClicked();
 
         uninstallButton.Text = "Uninstall mod files";
-        uninstallButton.Location = new Point(PageMargin + 298, 232);
+        uninstallButton.Location = new Point(PageMargin + 298, 292);
         uninstallButton.Size = new Size(ContentWidth - 298, 40);
         StyleButton(uninstallButton, ColorCard, ColorText, 10f, FontStyle.Regular);
         uninstallButton.Click += (s, e) => UninstallClicked();
 
-        modPage.Controls.Add(MakeLabel("UPDATES", PageMargin, 304, 300, 18, 8f, FontStyle.Bold, ColorMuted));
+        modPage.Controls.Add(MakeLabel("UPDATES", PageMargin, 362, 300, 18, 8f, FontStyle.Bold, ColorMuted));
 
         betaBox.Text = "Beta channel: receive test versions early";
-        betaBox.Location = new Point(PageMargin, 326);
+        betaBox.Location = new Point(PageMargin, 384);
         betaBox.Size = new Size(ContentWidth, 26);
         betaBox.ForeColor = ColorText;
         betaBox.BackColor = ColorWindow;
@@ -578,7 +578,7 @@ public class MainForm : Form
         var betaInfo = MakeLabel(
             "Test versions have their own ladder and only meet other test versions, so nothing done in a " +
             "beta counts on the real ladder. Untick to go back to the normal version.",
-            PageMargin, 354, ContentWidth, 60, 9.75f, FontStyle.Regular, ColorMuted);
+            PageMargin, 414, ContentWidth, 110, 9.75f, FontStyle.Regular, ColorMuted);
         betaInfo.AutoEllipsis = false;
 
         modPage.Controls.AddRange(new Control[] { modLabel, info, installButton, uninstallButton, betaBox, betaInfo });
