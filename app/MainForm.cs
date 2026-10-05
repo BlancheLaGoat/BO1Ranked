@@ -588,6 +588,15 @@ public class MainForm : Form
             await CheckForUpdate();
         };
 
+        var checkButton = new Button { Text = "Check for updates", Location = new Point(PageMargin + ContentWidth - 170, 356), Size = new Size(170, 28) };
+        StyleButton(checkButton, ColorCard, ColorText, 9f, FontStyle.Regular);
+        checkButton.Click += async (s, e) =>
+        {
+            ShowPage(playPage);     // the result is written in the log of the Play page
+            await CheckForUpdate();
+        };
+        modPage.Controls.Add(checkButton);
+
         var betaInfo = MakeLabel(
             "Test versions have their own ladder and only meet other test versions, so nothing done in a " +
             "beta counts on the real ladder. Untick to go back to the normal version.",
@@ -799,6 +808,7 @@ public class MainForm : Form
                             if (release.GetProperty("draft").GetBoolean()) continue;
                             string candidate = release.GetProperty("tag_name").GetString();
                             if (!IsVersion(candidate)) continue;
+                            if (!HasExe(release)) continue;     // still being built, or built without an exe
                             if (tag == null || CompareVersions(candidate, tag) > 0) tag = candidate;
                         }
                     }
@@ -809,6 +819,7 @@ public class MainForm : Form
                     using (JsonDocument document = JsonDocument.Parse(one))
                     {
                         tag = document.RootElement.GetProperty("tag_name").GetString();
+                        if (!HasExe(document.RootElement)) tag = null;
                     }
                     // A test version published by mistake as a normal release must never reach everyone.
                     if (tag != null && tag.Contains("-beta")) tag = null;
@@ -852,12 +863,36 @@ public class MainForm : Form
                 Application.Exit();
             }
         }
+        catch (HttpRequestException ex)
+        {
+            // 403 or 429 from GitHub = too many update checks from this connection in the last hour.
+            bool limited = ex.StatusCode == System.Net.HttpStatusCode.Forbidden
+                || ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests;
+            Log(limited
+                ? "Update check refused by GitHub (too many checks this hour) - try again later"
+                : "Update check failed: " + ex.Message);
+            SetStatus("Ready");
+            SetIdleButtons();
+        }
         catch (Exception ex)
         {
             Log("Update check failed: " + ex.Message);
             SetStatus("Ready");
             SetIdleButtons();
         }
+    }
+
+    // True when the release has its BO1Ranked.exe attached. The build takes a few minutes after a
+    // release is published: until then the release exists but there is nothing to download.
+    private static bool HasExe(JsonElement release)
+    {
+        JsonElement assets;
+        if (!release.TryGetProperty("assets", out assets)) return false;
+        foreach (JsonElement asset in assets.EnumerateArray())
+        {
+            if (asset.GetProperty("name").GetString() == ExeName) return true;
+        }
+        return false;
     }
 
     private static readonly Regex VersionPattern = new Regex("^v?([0-9]+)\\.([0-9]+)(\\.([0-9]+))?(-beta\\.?([0-9]*))?$");
