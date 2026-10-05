@@ -1,5 +1,7 @@
-# Builds BO1Ranked.exe and attaches it to the release whenever a tag like v0.4.0 is created.
+# Builds BO1Ranked.exe and attaches it to the release whenever a tag like v0.8.0 is created.
 # The app's version comes from the tag, so the tag is the only thing to choose when releasing.
+#   v0.8.0          normal release, sent to every player
+#   v0.8.0-beta.1   test version, sent only to players on the beta channel
 name: Release
 
 on:
@@ -32,3 +34,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/BO1Ranked.exe
+          # A tag like v0.8.0-beta.1 is a test version: published as a pre-release, so only players
+          # who ticked "Beta channel" in the app receive it.
+          prerelease: ${{ contains(github.ref_name, '-beta') }}
