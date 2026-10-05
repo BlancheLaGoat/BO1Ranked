@@ -88,6 +88,7 @@ public class MainForm : Form
     private readonly Label opponentLabel = new Label();
     private readonly ListBox logBox = new ListBox();
     private readonly System.Windows.Forms.Timer pollTimer = new System.Windows.Forms.Timer();
+    private readonly System.Windows.Forms.Timer cleanupTimer = new System.Windows.Forms.Timer();
 
     // Pages (one visible at a time) and their navigation buttons.
     private readonly Panel playPage = new Panel();
@@ -155,9 +156,19 @@ public class MainForm : Form
         pollTimer.Interval = 500;
         pollTimer.Tick += async (s, e) => await PollTick();
 
+        // The exchange folder only exists during a match. A few seconds after the end (time for the mod
+        // to read the final result) it is removed, so nothing is left in the Plutonium folder.
+        cleanupTimer.Interval = 3000;
+        cleanupTimer.Tick += (s, e) =>
+        {
+            cleanupTimer.Stop();
+            if (!inMatch) DeleteRankedFolder();
+        };
+
         LoadSettings();
         LoadIdentity();
-        FormClosing += (s, e) => { SaveSettings(); DeleteRankedFile("match.txt"); };
+        DeleteRankedFolder();       // leftovers from a crash or from an older version
+        FormClosing += (s, e) => { SaveSettings(); DeleteRankedFolder(); };
 
         if (!Directory.Exists(plutoniumDir))
         {
@@ -1015,6 +1026,8 @@ public class MainForm : Form
         try
         {
             foreach (string script in ModScripts) RemoveAndRestore(Path.Combine(mapsDir, script));
+            DeleteRankedFolder();
+            RemoveFolderIfEmpty(mapsDir);
             if (File.Exists(pluginMarkerPath))
             {
                 RemoveAndRestore(Path.Combine(pluginsDir, PluginFile));
@@ -1068,6 +1081,21 @@ public class MainForm : Form
         {
             File.Move(backup, path);
             Log("Restored: " + path);
+        }
+    }
+
+    // Leaves no empty folder behind when this app was the one that created it.
+    private static void RemoveFolderIfEmpty(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path) && !Directory.EnumerateFileSystemEntries(path).Any())
+            {
+                Directory.Delete(path);
+            }
+        }
+        catch
+        {
         }
     }
 
@@ -1176,6 +1204,7 @@ public class MainForm : Form
         lastRawChange = DateTime.UtcNow;
         lastOpponentRound = 0;
 
+        cleanupTimer.Stop();
         try
         {
             Directory.CreateDirectory(rankedDir);
@@ -1212,6 +1241,8 @@ public class MainForm : Form
         pollTimer.Stop();
         DeleteRankedFile("match.txt");      // also frees a player still waiting at spawn
         DeleteRankedFile("go.txt");
+        cleanupTimer.Stop();
+        cleanupTimer.Start();               // removes the whole folder in a few seconds
 
         SetIdleButtons();
         SetStatus(status);
@@ -1404,6 +1435,18 @@ public class MainForm : Form
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    private void DeleteRankedFolder()
+    {
+        try
+        {
+            if (Directory.Exists(rankedDir)) Directory.Delete(rankedDir, true);
+        }
+        catch
+        {
+            // A file is still in use: it will be removed at the next match end or app start.
         }
     }
 

@@ -81,18 +81,6 @@ rr_link_main()
 	setDvar( "ranked_my_finished", 0 );
 	setDvar( "ranked_my_finish_time", 0 );
 
-	createDirectory( "ranked" );
-	if ( fileExists( "ranked/opponent.txt" ) )
-	{
-		// Evite d'afficher l'adversaire de la partie precedente.
-		removeFile( "ranked/opponent.txt" );
-	}
-	if ( fileExists( "ranked/go.txt" ) )
-	{
-		removeFile( "ranked/go.txt" );
-	}
-	writeFile( "ranked/state.txt", "0;none;0;0;0;0;0;0;0" );
-
 	// Objectif : celui du match en cours (ranked/match.txt = "seed;objectif"), sinon la dvar, sinon 30.
 	goal = 0;
 	in_match = false;
@@ -104,6 +92,24 @@ rr_link_main()
 			goal = int( tokens[1] );
 			in_match = true;
 		}
+	}
+
+	// Le dossier ranked n'existe que pendant un match : l'app compagnon le cree quand un match est
+	// trouve et le supprime a la fin. Hors match, le mod ne lit et n'ecrit aucun fichier.
+	files_write = in_match;		// ecriture de state.txt
+	files_reads = -1;			// lectures d'opponent.txt restantes (-1 = sans limite)
+	if ( in_match )
+	{
+		if ( fileExists( "ranked/opponent.txt" ) )
+		{
+			// Evite d'afficher l'adversaire de la partie precedente.
+			removeFile( "ranked/opponent.txt" );
+		}
+		if ( fileExists( "ranked/go.txt" ) )
+		{
+			removeFile( "ranked/go.txt" );
+		}
+		writeFile( "ranked/state.txt", "0;none;0;0;0;0;0;0;0" );
 	}
 	if ( goal <= 0 )
 	{
@@ -286,24 +292,44 @@ rr_link_main()
 			seed = level.rr_seed;
 		}
 
-		writeFile( "ranked/state.txt", my_round + ";" + file_zone + ";" + my_down + ";" + file_time + ";" + file_finished + ";" + finish_time + ";" + seed + ";" + goal + ";1" );
+		if ( files_write )
+		{
+			writeFile( "ranked/state.txt", my_round + ";" + file_zone + ";" + my_down + ";" + file_time + ";" + file_finished + ";" + finish_time + ";" + seed + ";" + goal + ";1" );
+		}
 
 		// ---------------- etat adverse -> HUD ----------------
-		if ( fileExists( "ranked/opponent.txt" ) )
+		// En match : fichier ecrit par l'app. Hors match : dvars, pour tester a la main dans la console.
+		if ( in_match )
 		{
-			// Si le fichier est lu pendant que l'app l'ecrit, il peut etre incomplet :
-			// dans ce cas on garde les valeurs precedentes.
-			tokens = strTok( readFile( "ranked/opponent.txt" ), ";" );
-			if ( tokens.size >= 4 )
+			if ( files_reads != 0 && fileExists( "ranked/opponent.txt" ) )
 			{
-				opp_round = int( tokens[0] );
-				opp_zone = tokens[1];
-				if ( opp_zone == "none" )
+				// Si le fichier est lu pendant que l'app l'ecrit, il peut etre incomplet :
+				// dans ce cas on garde les valeurs precedentes.
+				tokens = strTok( readFile( "ranked/opponent.txt" ), ";" );
+				if ( tokens.size >= 4 )
 				{
-					opp_zone = "";
+					opp_round = int( tokens[0] );
+					opp_zone = tokens[1];
+					if ( opp_zone == "none" )
+					{
+						opp_zone = "";
+					}
+					opp_down = int( tokens[2] );
+					opp_finished = int( tokens[3] );
 				}
-				opp_down = int( tokens[2] );
-				opp_finished = int( tokens[3] );
+			}
+
+			// Fin du match : l'app supprime match.txt, puis tout le dossier quelques secondes plus tard.
+			// Le mod arrete d'ecrire tout de suite (sinon il recreerait le dossier) et lit encore
+			// deux fois l'etat adverse, pour ne pas manquer le resultat final.
+			if ( files_write && !fileExists( "ranked/match.txt" ) )
+			{
+				files_write = false;
+				files_reads = 2;
+			}
+			else if ( files_reads > 0 )
+			{
+				files_reads--;
 			}
 		}
 		else
