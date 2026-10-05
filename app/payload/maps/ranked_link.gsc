@@ -156,7 +156,7 @@ rr_link_main()
 	hud_round = rr_link_hud( player, 70, 1.4 );
 	hud_zone = rr_link_hud( player, 86, 1.2 );
 	hud_state = rr_link_hud( player, 100, 1.2 );
-	hud_result = rr_link_hud( player, 120, 1.8 );
+	hud_result = rr_center_hud( player, -70, 2.4 );		// resultat du match, au centre de l'ecran
 
 	last_round = -1;
 	last_zone = "?";
@@ -212,7 +212,7 @@ rr_link_main()
 		{
 			setDvar( "ranked_my_time", int( elapsed / 1000 ) );
 
-			if ( my_round >= goal && !gave_up )
+			if ( in_match && my_round >= goal && !gave_up )
 			{
 				finished = true;
 				setDvar( "ranked_my_finished", 1 );
@@ -223,10 +223,7 @@ rr_link_main()
 				{
 					hud_result.color = ( 0.3, 1, 0.3 );
 					hud_result setText( "VICTORY - round " + goal + " in " + rr_format_time( elapsed ) );
-				}
-				else
-				{
-					hud_result setText( "Round " + goal + " reached in " + rr_format_time( elapsed ) );
+					level thread rr_match_over( player );
 				}
 			}
 		}
@@ -239,9 +236,11 @@ rr_link_main()
 			if ( level.rr_surrender )
 			{
 				hud_result setText( "DEFEAT - you surrendered" );
+				level thread rr_match_over( player );
 			}
 			else
 			{
+				// Mort : le jeu lance deja sa propre fin de partie et son retour au menu.
 				hud_result setText( "DEFEAT - you died" );
 			}
 		}
@@ -357,6 +356,10 @@ rr_link_main()
 			opp_out = true;
 			hud_result.color = ( 0.3, 1, 0.3 );
 			hud_result setText( "VICTORY - your opponent is out" );
+			if ( in_match )
+			{
+				level thread rr_match_over( player );
+			}
 		}
 
 		if ( opp_finished == 1 && !finished && !lost && !gave_up && !opp_out )
@@ -364,6 +367,10 @@ rr_link_main()
 			lost = true;
 			hud_result.color = ( 1, 0.3, 0.3 );
 			hud_result setText( "DEFEAT - opponent reached round " + goal );
+			if ( in_match )
+			{
+				level thread rr_match_over( player );
+			}
 		}
 
 		wait 0.5;
@@ -508,6 +515,49 @@ rr_link_hud( player, y, scale )
 	hud.alpha = 1;
 	hud.color = ( 1, 1, 1 );
 	return hud;
+}
+
+// Texte centre a l'ecran (resultat du match, compte a rebours de sortie).
+rr_center_hud( player, y, scale )
+{
+	hud = NewClientHudElem( player );
+	hud.foreground = true;
+	hud.sort = 2;
+	hud.hidewheninmenu = true;
+	hud.alignX = "center";
+	hud.alignY = "middle";
+	hud.horzAlign = "center";
+	hud.vertAlign = "middle";
+	hud.x = 0;
+	hud.y = y;
+	hud.fontScale = scale;
+	hud.alpha = 1;
+	hud.color = ( 1, 1, 1 );
+	return hud;
+}
+
+// Fin du match, pour le vainqueur comme pour le perdant : plus aucun zombie n'apparait, puis retour
+// automatique au menu. Si le joueur meurt entre-temps, la fin de partie normale du jeu prend le relais.
+rr_match_over( player )
+{
+	level endon( "end_game" );
+
+	if ( isDefined( level.rr_match_over ) )
+	{
+		return;
+	}
+	level.rr_match_over = true;
+
+	flag_clear( "spawn_zombies" );
+
+	hud = rr_center_hud( player, -30, 1.5 );
+	for ( seconds = 30; seconds > 0; seconds-- )
+	{
+		hud setText( "Returning to the menu in " + seconds + " s" );
+		wait 1;
+	}
+
+	ExitLevel( false );
 }
 
 rr_format_time( ms )
