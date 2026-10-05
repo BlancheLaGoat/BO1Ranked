@@ -153,27 +153,6 @@ rr_link_main()
 
 	start_time = getTime();
 
-	// Bandeau permanent : visible meme si l'affichage des checksums etait bloque.
-	seed_text = "";
-	if ( isDefined( level.rr_seed ) )
-	{
-		seed_text = " - seed " + level.rr_seed;
-	}
-	hud_mark = NewClientHudElem( player );
-	hud_mark.foreground = true;
-	hud_mark.sort = 1;
-	hud_mark.hidewheninmenu = false;
-	hud_mark.alignX = "center";
-	hud_mark.alignY = "top";
-	hud_mark.horzAlign = "user_center";
-	hud_mark.vertAlign = "user_top";
-	hud_mark.x = 0;
-	hud_mark.y = 4;
-	hud_mark.fontScale = 1.2;
-	hud_mark.alpha = 0.85;
-	hud_mark.color = ( 1, 0.8, 0.2 );
-	hud_mark setText( "RANKED MOD ACTIVE" + seed_text );
-
 	hud_round = rr_link_hud( player, 70, 1.4 );
 	hud_zone = rr_link_hud( player, 86, 1.2 );
 	hud_state = rr_link_hud( player, 100, 1.2 );

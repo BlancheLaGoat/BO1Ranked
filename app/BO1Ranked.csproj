@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>BO1Ranked</AssemblyName>
     <RootNamespace>BO1Ranked</RootNamespace>
-    <Version>0.7.2</Version>
+    <Version>0.7.4</Version>
   </PropertyGroup>
 
   <!-- Mod scripts shipped inside the exe and copied into Plutonium by the "Install mod files" button. -->

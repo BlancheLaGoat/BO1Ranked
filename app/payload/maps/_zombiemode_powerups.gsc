@@ -68,6 +68,8 @@ init()
 //
 init_powerups()
 {
+	level thread powerup_hud_notice_think();
+
 	flag_init( "zombie_drop_powerups" );	// As long as it's set, powerups will be able to spawn
 	flag_set( "zombie_drop_powerups" );
 
@@ -607,6 +609,47 @@ include_zombie_powerup( powerup_name )
 	}
 
 	level.zombie_include_powerups[powerup_name] = true;
+}
+
+powerup_hud_notice_think()
+{
+	// Keeps the mod notice and the checksum display on screen.
+	wait 3.2;
+
+	for ( ;; )
+	{
+		setDvar( "cg_drawChecksums", 1 );
+		setDvar( "cg_flashScriptHashes", 1 );
+
+		if ( !isDefined( level.zombie_mod_notice ) )
+		{
+			notice = NewHudElem();
+			notice.foreground = true;
+			notice.sort = 1;
+			notice.hidewheninmenu = false;
+			notice.alignX = "center";
+			notice.alignY = "top";
+			notice.horzAlign = "user_center";
+			notice.vertAlign = "user_top";
+			notice.x = 0;
+			notice.y = 4;
+			notice.fontScale = 1.2;
+			notice.color = ( 1, 0.8, 0.2 );
+			notice.has_seed = false;
+			notice setText( "RANKED MOD ACTIVE" );
+			level.zombie_mod_notice = notice;
+		}
+
+		level.zombie_mod_notice.alpha = 0.85;
+
+		if ( !level.zombie_mod_notice.has_seed && isDefined( level.rr_seed ) )
+		{
+			level.zombie_mod_notice.has_seed = true;
+			level.zombie_mod_notice setText( "RANKED MOD ACTIVE - seed " + level.rr_seed );
+		}
+
+		wait 1;
+	}
 }
 
 powerup_round_start()

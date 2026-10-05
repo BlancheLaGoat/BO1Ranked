@@ -854,7 +854,14 @@ public class MainForm : Form
             modLabel.ForeColor = ColorGood;
             installButton.Text = "Reinstall mod files";
         }
-        else if (present > 0 || plugin)
+        else if (present == 0 && plugin)
+        {
+            // The scripts are gone but the plugin is still loaded by the game: it changes the checksums.
+            modLabel.Text = "Plugin still installed - click Uninstall to remove it";
+            modLabel.ForeColor = ColorWarn;
+            installButton.Text = "Install mod files";
+        }
+        else if (present > 0)
         {
             modLabel.Text = "Mod files: update needed";
             modLabel.ForeColor = ColorWarn;
@@ -866,7 +873,7 @@ public class MainForm : Form
             modLabel.ForeColor = ColorBad;
             installButton.Text = "Install mod files";
         }
-        uninstallButton.Enabled = present > 0;
+        uninstallButton.Enabled = present > 0 || plugin;
     }
 
     // After an app update the embedded scripts are newer than the installed ones. The player already
@@ -1011,9 +1018,13 @@ public class MainForm : Form
         foreach (string script in ModScripts) text.AppendLine("    " + script);
         text.AppendLine();
         text.AppendLine(pluginsDir);
-        text.AppendLine("    " + PluginFile + "  (only if this app installed it)");
+        text.AppendLine("    " + PluginFile);
+        text.AppendLine();
+        text.AppendLine("The plugin is removed too because the game loads it even without the scripts,");
+        text.AppendLine("which changes your checksums. If another mod of yours needs it, answer No.");
         text.AppendLine();
         text.AppendLine("Files that were backed up during install are put back.");
+        text.AppendLine("Close the game before continuing.");
         text.AppendLine();
         text.AppendLine("Uninstall now?");
 
@@ -1028,21 +1039,14 @@ public class MainForm : Form
             foreach (string script in ModScripts) RemoveAndRestore(Path.Combine(mapsDir, script));
             DeleteRankedFolder();
             RemoveFolderIfEmpty(mapsDir);
-            if (File.Exists(pluginMarkerPath))
-            {
-                RemoveAndRestore(Path.Combine(pluginsDir, PluginFile));
-                File.Delete(pluginMarkerPath);
-            }
-            else
-            {
-                Log("Kept " + PluginFile + " (it was not installed by this app)");
-            }
-            SetStatus("Mod files removed");
+            RemoveAndRestore(Path.Combine(pluginsDir, PluginFile));
+            File.Delete(pluginMarkerPath);
+            SetStatus("Mod files removed - restart the game to unload the plugin");
         }
         catch (Exception ex)
         {
             Log("Uninstall failed: " + ex.Message);
-            SetStatus("Uninstall failed (is the game still running?)");
+            SetStatus("Uninstall failed - close the game and try again");
         }
 
         RefreshModStatus();

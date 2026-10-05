@@ -42,6 +42,7 @@ rr_init()
 	level.rr_streams = [];
 
 	level thread rr_show_seed();
+	level thread rr_notice_think();
 }
 
 rr_show_seed()
@@ -156,6 +157,47 @@ rr_event_randomintrange( name, min, max )
 {
 	rr_begin_event( name );
 	return rr_randomintrange( name, min, max );
+}
+
+rr_notice_think()
+{
+	// Keeps the mod notice and the checksum display on screen.
+	wait 3.6;
+
+	for ( ;; )
+	{
+		setDvar( "cg_drawChecksums", 1 );
+		setDvar( "cg_flashScriptHashes", 1 );
+
+		if ( !isDefined( level.zombie_mod_notice ) )
+		{
+			notice = NewHudElem();
+			notice.foreground = true;
+			notice.sort = 1;
+			notice.hidewheninmenu = false;
+			notice.alignX = "center";
+			notice.alignY = "top";
+			notice.horzAlign = "user_center";
+			notice.vertAlign = "user_top";
+			notice.x = 0;
+			notice.y = 4;
+			notice.fontScale = 1.2;
+			notice.color = ( 1, 0.8, 0.2 );
+			notice.has_seed = false;
+			notice setText( "RANKED MOD ACTIVE" );
+			level.zombie_mod_notice = notice;
+		}
+
+		level.zombie_mod_notice.alpha = 0.85;
+
+		if ( !level.zombie_mod_notice.has_seed && isDefined( level.rr_seed ) )
+		{
+			level.zombie_mod_notice.has_seed = true;
+			level.zombie_mod_notice setText( "RANKED MOD ACTIVE - seed " + level.rr_seed );
+		}
+
+		wait 1;
+	}
 }
 
 // Equivalent de array_randomize( array )
