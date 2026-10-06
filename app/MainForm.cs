@@ -136,6 +136,7 @@ public class MainForm : Form
     private bool inMatch;
     private bool testMode;
     private int matchSeed;
+    private string matchCode = "";           // identifies the match on the server, used to send the recording
     private int matchGoal;
     private string lastStateSent = "";
     private string pendingOpponentLine;      // line to write to opponent.txt (retried if the file is busy)
@@ -1429,6 +1430,8 @@ public class MainForm : Form
 
     private void EndMatch(string status)
     {
+        if (inMatch && !testMode && matchCode != "") _ = SendRecording(matchCode);
+        matchCode = "";
         inMatch = false;
         testMode = false;
         pollTimer.Stop();
@@ -1442,6 +1445,38 @@ public class MainForm : Form
         Log(status);
         matchLabel.Text = "No match in progress";
         opponentLabel.Text = "Last result: " + status;
+    }
+
+    // Anti-cheat: the mod records the match (one line per second) in ranked/replay.txt.
+    // The file is sent to the server, which checks it and keeps it only if something looks wrong.
+    private async Task SendRecording(string code)
+    {
+        try
+        {
+            await Task.Delay(1200);         // lets the mod write its last lines; the folder is removed at 3 s
+            string path = Path.Combine(rankedDir, "replay.txt");
+            if (!File.Exists(path)) { Log("No match recording to send"); return; }
+
+            string text;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream))
+                text = await reader.ReadToEndAsync();
+
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, ServerHttpUrl + "/replay?code=" + Uri.EscapeDataString(code));
+                request.Headers.Add("X-Player-Token", identityToken);
+                request.Content = new StringContent(text, Encoding.UTF8, "text/plain");
+                HttpResponseMessage response = await web.SendAsync(request);
+                if (response.IsSuccessStatusCode) { Log("Match recording sent"); return; }
+                await Task.Delay(5000);     // the server may not have closed the match yet
+            }
+            Log("Match recording could not be sent");
+        }
+        catch (Exception ex)
+        {
+            Log("Match recording could not be sent: " + ex.Message);
+        }
     }
 
     private async Task PollTick()
@@ -1798,6 +1833,7 @@ public class MainForm : Form
                 if (f.Length >= 4)
                 {
                     testMode = false;
+                    matchCode = f.Length >= 6 ? f[5] : "";
                     BeginMatch(ParseInt(f[1]), ParseInt(f[2]), f[3], f.Length >= 5 ? ParseInt(f[4]) : 0);
                 }
                 break;
