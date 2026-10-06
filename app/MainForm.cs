@@ -118,6 +118,7 @@ public class MainForm : Form
     private readonly DataGridView ladderGrid = new DataGridView();
     private readonly Button saveNameButton = new Button();
     private readonly CheckBox betaBox = new CheckBox();
+    private Label betaInfo = new Label();
     private bool betaChannel;
     private readonly Label profileEloLabel = new Label();
     private readonly Label profileRecordLabel = new Label();
@@ -598,7 +599,7 @@ public class MainForm : Form
         };
         modPage.Controls.Add(checkButton);
 
-        var betaInfo = MakeLabel(
+        betaInfo = MakeLabel(
             "Test versions have their own ladder and only meet other test versions, so nothing done in a " +
             "beta counts on the real ladder. Untick to go back to the normal version.",
             PageMargin, 414, ContentWidth, 110, 9.75f, FontStyle.Regular, ColorMuted);
@@ -953,6 +954,13 @@ public class MainForm : Form
         // otherwise the app would put the normal version back at its first start.
         betaChannel = betaChannelSaved == "" ? IsBetaBuild : betaChannelSaved == "beta=1";
         betaBox.Checked = betaChannel;
+
+        // The beta option is for testers only: a normal build hides it, unless the app was started
+        // with "-beta" or the beta channel is already on.
+        bool showBeta = IsBetaBuild || betaChannel
+            || Environment.GetCommandLineArgs().Any(a => a.TrimStart('-', '/').Equals("beta", StringComparison.OrdinalIgnoreCase));
+        betaBox.Visible = showBeta;
+        betaInfo.Visible = showBeta;
     }
 
     private void SaveSettings()
