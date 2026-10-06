@@ -149,9 +149,34 @@ rr_link_main()
 	if ( in_match )
 	{
 		rr_wait_for_go( player, goal );
+
+		if ( isDefined( level.rr_cancelled ) )
+		{
+			// Match annule avant le depart : la partie continue comme une partie solo normale.
+			in_match = false;
+			files_write = false;
+		}
+		else
+		{
+			level thread rr_settings_watch();
+		}
 	}
 
 	start_time = getTime();
+
+	if ( in_match )
+	{
+		// Enregistrement du match (anti-triche) : voir rr_record_think.
+		seed_now = 0;
+		if ( isDefined( level.rr_seed ) )
+		{
+			seed_now = level.rr_seed;
+		}
+		level.rr_rec_start = start_time;
+		level.rr_rec_on = true;
+		writeFile( "ranked/replay.txt", "H;" + seed_now + ";" + goal + "\n" );
+		level thread rr_record_think( player );
+	}
 
 	hud_round = rr_link_hud( player, 70, 1.4 );
 	hud_zone = rr_link_hud( player, 86, 1.2 );
@@ -171,8 +196,10 @@ rr_link_main()
 	level.rr_dead = false;
 	if ( in_match )
 	{
-		// Commande console "surrender" (fournie par le plugin t5-gsc-utils).
+		// Abandon : commande "surrender", attachee a la touche F10 pour ne pas passer par la console.
+		// (addCommand et executeCommand viennent du plugin t5-gsc-utils.)
 		addCommand( "surrender", ::rr_cmd_surrender );
+		executeCommand( "bind F10 surrender" );
 		level thread rr_watch_game_over();
 	}
 
@@ -218,6 +245,7 @@ rr_link_main()
 				setDvar( "ranked_my_finished", 1 );
 				setDvar( "ranked_my_finish_time", elapsed );
 				finish_time = elapsed;
+				rr_record_sample( player );		// le round objectif doit figurer dans l'enregistrement
 
 				if ( !lost )
 				{
@@ -226,6 +254,16 @@ rr_link_main()
 					level thread rr_match_over( player );
 				}
 			}
+		}
+
+		// ---------------- reglage de triche detecte ----------------
+		if ( in_match && isDefined( level.rr_cheated ) && !finished && !lost && !opp_out && !gave_up )
+		{
+			gave_up = true;
+			rr_event( "FLAG;" + level.rr_cheated );
+			hud_result.color = ( 1, 0.3, 0.3 );
+			hud_result setText( "DEFEAT - cheat setting used: " + level.rr_cheated );
+			level thread rr_match_over( player );
 		}
 
 		// ---------------- mort ou abandon ----------------
@@ -304,6 +342,7 @@ rr_link_main()
 			{
 				files_write = false;
 				files_reads = 2;
+				level.rr_rec_on = false;
 			}
 			else if ( files_reads > 0 )
 			{
@@ -441,6 +480,7 @@ rr_wait_for_go( player, goal )
 
 	if ( cancelled )
 	{
+		level.rr_cancelled = true;
 		hud.color = ( 1, 0.3, 0.3 );
 		hud setText( "Match cancelled" );
 	}
@@ -468,13 +508,166 @@ rr_wait_for_go( player, goal )
 
 	if ( !cancelled )
 	{
-		iPrintLn( "Type 'surrender' in the console to give up" );
+		iPrintLn( "Press F10 twice to surrender" );
 	}
 }
 
+// Deux appuis en moins de 3 secondes, pour qu'un appui accidentel ne fasse pas perdre le match.
 rr_cmd_surrender( args )
 {
-	level.rr_surrender = true;
+	now = getTime();
+	if ( isDefined( level.rr_surrender_time ) && now - level.rr_surrender_time < 3000 )
+	{
+		level.rr_surrender = true;
+		return;
+	}
+
+	level.rr_surrender_time = now;
+	iPrintLnBold( "Press F10 again to surrender" );
+}
+
+// Anti-triche : pendant un match, les reglages du jeu qui donnent un avantage doivent garder leur
+// valeur normale. La console ne peut pas etre desactivee depuis un script, mais ces reglages sont
+// relus 20 fois par seconde : des qu'un seul est modifie, le joueur perd le match.
+// Limite connue : une commande de triche tapee et annulee dans la meme ligne de console
+// (ex. "sv_cheats 1; give all; sv_cheats 0") n'est pas vue par cette surveillance.
+rr_settings_watch()
+{
+	level endon( "end_game" );
+
+	base_speed = getDvarInt( "g_speed" );		// fixe par le jeu au chargement de la map
+	strikes = 0;
+
+	while ( !isDefined( level.rr_match_over ) )
+	{
+		reason = "";
+		if ( getDvarInt( "sv_cheats" ) != 0 )
+		{
+			reason = "sv_cheats";
+		}
+		else if ( getDvarInt( "developer" ) != 0 )
+		{
+			reason = "developer";
+		}
+		else if ( abs( getDvarFloat( "timescale" ) - 1 ) > 0.01 || abs( getDvarFloat( "com_timescale" ) - 1 ) > 0.01 )
+		{
+			reason = "timescale";
+		}
+		else if ( getDvarInt( "player_sustainAmmo" ) != 0 )
+		{
+			reason = "player_sustainAmmo";
+		}
+		else if ( getDvarInt( "player_sprintUnlimited" ) != 0 )
+		{
+			reason = "player_sprintUnlimited";
+		}
+		else if ( getDvarInt( "g_ai" ) != 1 )
+		{
+			reason = "g_ai";
+		}
+		else if ( getDvarInt( "ai_disableSpawn" ) != 0 )
+		{
+			reason = "ai_disableSpawn";
+		}
+		else if ( getDvar( "magic_chest_movable" ) != "1" )
+		{
+			reason = "magic_chest_movable";
+		}
+		else if ( getDvarInt( "jump_height" ) != 39 )
+		{
+			reason = "jump_height";
+		}
+		else if ( getDvarInt( "g_speed" ) != base_speed )
+		{
+			reason = "g_speed";
+		}
+
+		if ( reason == "" )
+		{
+			strikes = 0;
+		}
+		else
+		{
+			// Deux lectures de suite, pour ne pas reagir a une valeur lue en plein changement.
+			strikes++;
+			if ( strikes >= 2 )
+			{
+				level.rr_cheated = reason;
+				return;
+			}
+		}
+
+		wait 0.05;
+	}
+}
+
+// Enregistrement du match (anti-triche). Une ligne par seconde dans ranked/replay.txt :
+//   S;temps_s;round;points;vie;vie_max;arme;chargeur;reserve;x;y;z;kills;downs
+// plus une ligne par evenement (voir rr_event). L'app compagnon envoie le fichier au serveur a la
+// fin du match ; le serveur y cherche ce qui ne peut pas arriver dans une partie normale.
+rr_record_think( player )
+{
+	while ( isDefined( level.rr_rec_on ) && level.rr_rec_on )
+	{
+		rr_record_sample( player );
+		wait 1;
+	}
+}
+
+rr_record_sample( player )
+{
+	if ( !isDefined( level.rr_rec_on ) || !level.rr_rec_on )
+	{
+		return;
+	}
+
+	t = int( ( getTime() - level.rr_rec_start ) / 1000 );
+
+	round = 0;
+	if ( isDefined( level.round_number ) )
+	{
+		round = level.round_number;
+	}
+
+	weapon = player getCurrentWeapon();
+	clip = 0;
+	stock = 0;
+	if ( !isDefined( weapon ) || weapon == "" )
+	{
+		weapon = "none";
+	}
+	if ( weapon != "none" )
+	{
+		clip = player getWeaponAmmoClip( weapon );
+		stock = player getWeaponAmmoStock( weapon );
+	}
+
+	kills = 0;
+	if ( isDefined( player.kills ) )
+	{
+		kills = player.kills;
+	}
+	downs = 0;
+	if ( isDefined( player.downs ) )
+	{
+		downs = player.downs;
+	}
+
+	appendFile( "ranked/replay.txt", "S;" + t + ";" + round + ";" + player.score + ";" + player.health + ";" + player.maxhealth + ";" + weapon + ";" + clip + ";" + stock + ";" + int( player.origin[0] ) + ";" + int( player.origin[1] ) + ";" + int( player.origin[2] ) + ";" + kills + ";" + downs + "\n" );
+}
+
+// Evenement dans l'enregistrement. Appele aussi depuis _zombiemode_weapons.gsc :
+//   GIVE;arme;box    arme sortie de la box
+//   GIVE;arme;buy    arme achetee (mur) ou donnee par le jeu
+//   FLAG;motif       reglage de triche detecte
+rr_event( text )
+{
+	if ( !isDefined( level.rr_rec_on ) || !level.rr_rec_on )
+	{
+		return;
+	}
+	t = int( ( getTime() - level.rr_rec_start ) / 1000 );
+	appendFile( "ranked/replay.txt", "E;" + t + ";" + text + "\n" );
 }
 
 // Fin de partie (mort du joueur en solo) = defaite.

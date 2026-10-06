@@ -2413,6 +2413,7 @@ treasure_chest_glowfx()
 // self is the player string comes from the randomization function
 treasure_chest_give_weapon( weapon_string )
 {
+	maps\ranked_link::rr_event( "GIVE;" + weapon_string + ";box" ); // RANKED : enregistrement du match
 	self.last_box_weapon = GetTime();
 	primaryWeapons = self GetWeaponsListPrimaries(); 
 	current_weapon = undefined; 
@@ -2942,6 +2943,7 @@ get_pack_a_punch_weapon_options( weapon )
 
 weapon_give( weapon, is_upgrade )
 {
+	maps\ranked_link::rr_event( "GIVE;" + weapon + ";buy" ); // RANKED : enregistrement du match
 	primaryWeapons = self GetWeaponsListPrimaries(); 
 	current_weapon = undefined;
 	weapon_limit = 2;
