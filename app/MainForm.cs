@@ -77,6 +77,7 @@ public class MainForm : Form
     private static readonly string pluginsDir = Path.Combine(plutoniumDir, "plugins");
     private static readonly string storageDir = Path.Combine(plutoniumDir, "storage", "t5");
     private static readonly string modsDir = Path.Combine(storageDir, "mods");
+    private static readonly string rawDir = Path.Combine(storageDir, "raw");
     private static readonly string rankedDir = Path.Combine(plutoniumDir, "storage", "t5", "ranked");
 
     private static readonly string settingsPath = Path.Combine(
@@ -1469,7 +1470,7 @@ public class MainForm : Form
         if (!testMode)
         {
             StartFileWatch();
-            _ = SendLine("INTEGRITY;" + InstalledFilesHash());
+            _ = SendLine("INTEGRITY;" + InstalledFilesHash() + ";" + PlutoniumFilesHash());
         }
 
         cleanupTimer.Stop();
@@ -1593,6 +1594,36 @@ public class MainForm : Form
         }
     }
 
+    // Fingerprint of the scripts shipped by Plutonium (storage\t5\raw): names and contents. Two players
+    // with the same Plutonium version have the same one, so a script added or edited there shows up
+    // as a difference between the two players.
+    private static string PlutoniumFilesHash()
+    {
+        try
+        {
+            if (!Directory.Exists(rawDir)) return "none";
+            using (var sha = SHA256.Create())
+            using (var all = new MemoryStream())
+            {
+                var paths = Directory.EnumerateFiles(rawDir, "*", SearchOption.AllDirectories)
+                    .Where(p => { string e = Path.GetExtension(p).ToLowerInvariant(); return e == ".gsc" || e == ".csc"; })
+                    .OrderBy(p => p, StringComparer.OrdinalIgnoreCase);
+                foreach (string path in paths)
+                {
+                    byte[] name = Encoding.UTF8.GetBytes(path.Substring(rawDir.Length).ToLowerInvariant());
+                    byte[] bytes = File.ReadAllBytes(path);
+                    all.Write(name, 0, name.Length);
+                    all.Write(bytes, 0, bytes.Length);
+                }
+                return Convert.ToHexString(sha.ComputeHash(all.ToArray())).Substring(0, 16).ToLowerInvariant();
+            }
+        }
+        catch (Exception)
+        {
+            return "unreadable";
+        }
+    }
+
     private static string FileHash(string path)
     {
         try
@@ -1623,7 +1654,10 @@ public class MainForm : Form
     {
         string extension = Path.GetExtension(path).ToLowerInvariant();
         if (extension != ".gsc" && extension != ".csc") return false;
-        return !path.StartsWith(modsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        // "raw" belongs to Plutonium, which updates it: it is not blocked, but its content is compared
+        // between the two players of a match (see PlutoniumFilesHash).
+        return !path.StartsWith(modsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            && !path.StartsWith(rawDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     // Scripts and plugins that are not part of the mod: the game could load them during a ranked match.
