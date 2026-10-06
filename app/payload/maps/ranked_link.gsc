@@ -42,6 +42,13 @@ rr_link_init()
 	}
 	level.rr_link_started = true;
 
+	// En match, le debut de partie du jeu (grenades, affichage du round 1, premiers zombies) est
+	// retenu jusqu'au GO : le jeu appelle cette fonction juste avant de lancer le round 1.
+	if ( fileExists( "ranked/match.txt" ) )
+	{
+		level.round_prestart_func = ::rr_prestart;
+	}
+
 	level thread rr_link_main();
 }
 
@@ -62,6 +69,20 @@ rr_checksum_guard()
 		rr_force_checksums();
 		wait 0.5;
 	}
+}
+
+rr_prestart()
+{
+	level.rr_prestart_entered = true;
+
+	while ( get_players().size == 0 || !isDefined( level.rr_goal ) )
+	{
+		wait 0.05;
+	}
+	rr_wait_for_go( get_players()[0], level.rr_goal );
+	level.rr_go_done = true;
+
+	wait 2;		// delai normal du jeu avant le round 1
 }
 
 rr_link_main()
@@ -120,35 +141,38 @@ rr_link_main()
 		goal = 30;
 	}
 
+	level.rr_goal = goal;
+
 	while ( get_players().size == 0 )
 	{
 		wait 0.5;
 	}
 	player = get_players()[0];
 
-	// En match : aucun zombie n'apparait tant que les deux joueurs ne sont pas prets.
-	// Le drapeau est coupe des qu'il existe, avant le debut du round 1.
+	// En match : attente du GO. Normalement le debut de partie est retenu par rr_prestart.
+	// Securite : si le jeu a demarre le round 1 sans passer par rr_prestart, les zombies sont
+	// bloques ici et l'attente du GO se fait a ce moment-la.
 	if ( in_match )
 	{
-		while ( !isDefined( level.flag ) || !isDefined( level.flag["spawn_zombies"] ) )
-		{
-			wait 0.05;
-		}
-		flag_clear( "spawn_zombies" );
-	}
-
-	while ( !rr_flag_is_set( "begin_spawning" ) )
-	{
-		if ( in_match )
+		while ( !isDefined( level.rr_go_done ) )
 		{
 			player freezeControls( true );
+			if ( !isDefined( level.rr_prestart_entered ) && rr_flag_is_set( "begin_spawning" ) )
+			{
+				flag_clear( "spawn_zombies" );
+				rr_wait_for_go( player, goal );
+				level.rr_go_done = true;
+				if ( isDefined( level.rr_cancelled ) )
+				{
+					flag_set( "spawn_zombies" );
+				}
+				else
+				{
+					level thread rr_spawn_after( 5 );
+				}
+			}
+			wait 0.1;
 		}
-		wait 0.1;
-	}
-
-	if ( in_match )
-	{
-		rr_wait_for_go( player, goal );
 
 		if ( isDefined( level.rr_cancelled ) )
 		{
@@ -161,8 +185,19 @@ rr_link_main()
 			level thread rr_settings_watch();
 		}
 	}
+	else
+	{
+		while ( !rr_flag_is_set( "begin_spawning" ) )
+		{
+			wait 0.1;
+		}
+	}
 
 	start_time = getTime();
+	if ( in_match && isDefined( level.rr_go_time ) )
+	{
+		start_time = level.rr_go_time;		// le chrono part au GO
+	}
 
 	if ( in_match )
 	{
@@ -502,7 +537,7 @@ rr_wait_for_go( player, goal )
 	}
 
 	player freezeControls( false );
-	flag_set( "spawn_zombies" );
+	level.rr_go_time = getTime();
 
 	hud thread rr_destroy_after( 2 );
 
@@ -675,6 +710,15 @@ rr_watch_game_over()
 {
 	level waittill( "end_game" );
 	level.rr_dead = true;
+}
+
+rr_spawn_after( seconds )
+{
+	wait seconds;
+	if ( !isDefined( level.rr_match_over ) )
+	{
+		flag_set( "spawn_zombies" );
+	}
 }
 
 rr_destroy_after( seconds )
