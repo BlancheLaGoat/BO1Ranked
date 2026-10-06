@@ -75,6 +75,7 @@ public class MainForm : Form
 
     private static readonly string mapsDir = Path.Combine(plutoniumDir, "storage", "t5", "maps");
     private static readonly string pluginsDir = Path.Combine(plutoniumDir, "plugins");
+    private static readonly string storageDir = Path.Combine(plutoniumDir, "storage", "t5");
     private static readonly string rankedDir = Path.Combine(plutoniumDir, "storage", "t5", "ranked");
 
     private static readonly string settingsPath = Path.Combine(
@@ -137,7 +138,12 @@ public class MainForm : Form
     private bool inMatch;
     private bool testMode;
     private int matchSeed;
-    private string matchCode = "";           // identifies the match on the server, used to send the recording
+    private string matchCode = "";           // identifies the match on the server
+    private long recordingOffset;            // how much of ranked/replay.txt has already been sent to the server
+    private bool recordingBusy;
+    private bool violationSent;
+    private FileSystemWatcher scriptWatcher;
+    private FileSystemWatcher pluginWatcher;
     private int matchGoal;
     private string lastStateSent = "";
     private string pendingOpponentLine;      // line to write to opponent.txt (retried if the file is busy)
@@ -1279,16 +1285,69 @@ public class MainForm : Form
         }
     }
 
-    private bool RequireMod()
+    private async Task<bool> RequireMod()
     {
         RefreshModStatus();
-        if (modInstalled) return true;
+        if (!modInstalled)
+        {
+            ShowPage(modPage);
+            MessageBox.Show(this,
+                "The mod files are missing or out of date.\nClick \"" + installButton.Text + "\" first.",
+                "BO1 Ranked", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return false;
+        }
 
-        ShowPage(modPage);
-        MessageBox.Show(this,
-            "The mod files are missing or out of date.\nClick \"" + installButton.Text + "\" first.",
-            "BO1 Ranked", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        return false;
+        // Ranked matches are played with the mod's own scripts and plugin, plus the community tools
+        // that the admins have allowed. A file is recognised by its content, not by its name.
+        List<string> foreign = ForeignFiles();
+        if (foreign.Count > 0)
+        {
+            var hashes = new Dictionary<string, string>();
+            foreach (string path in foreign) hashes[path] = FileHash(path);
+
+            try
+            {
+                string json = await web.GetStringAsync(ServerHttpUrl + "/allowed");
+                var allowed = new HashSet<string>(JsonSerializer.Deserialize<string[]>(json) ?? new string[0]);
+                foreign = foreign.Where(p => !allowed.Contains(hashes[p])).ToList();
+            }
+            catch (Exception ex)
+            {
+                Log("Could not get the list of allowed files: " + ex.Message);
+            }
+        }
+        if (foreign.Count > 0)
+        {
+            // Tell the server, so that an admin can allow a tool that everyone uses.
+            try
+            {
+                var report = foreign.Take(30).Select(p => new Dictionary<string, string>
+                {
+                    ["hash"] = FileHash(p),
+                    ["name"] = ShortPath(p)
+                }).ToList();
+                var request = new HttpRequestMessage(HttpMethod.Post, ServerHttpUrl + "/seen");
+                request.Headers.Add("X-Player-Token", identityToken);
+                request.Content = new StringContent(JsonSerializer.Serialize(report), Encoding.UTF8, "application/json");
+                await web.SendAsync(request);
+            }
+            catch (Exception)
+            {
+                // reporting is only a convenience
+            }
+
+            var text = new StringBuilder();
+            text.AppendLine("These scripts or plugins are installed in Plutonium and are not on the list of files");
+            text.AppendLine("allowed in ranked. Move them out of the Plutonium folder, or ask an admin to allow them");
+            text.AppendLine("(they have just been reported), then try again.");
+            text.AppendLine();
+            foreach (string path in foreign.Take(12)) text.AppendLine(ShortPath(path));
+            if (foreign.Count > 12) text.AppendLine("... and " + (foreign.Count - 12) + " more");
+            foreach (string path in foreign) Log("Not allowed in ranked: " + ShortPath(path));
+            MessageBox.Show(this, text.ToString(), "BO1 Ranked", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------ buttons
@@ -1307,7 +1366,7 @@ public class MainForm : Form
             return;
         }
 
-        if (!RequireMod()) return;
+        if (!await RequireMod()) return;
 
         practiceMatch = false;
         searchButton.Text = "CANCEL SEARCH";
@@ -1317,7 +1376,7 @@ public class MainForm : Form
     private async Task PracticeClicked()
     {
         if (inMatch || socket != null) return;
-        if (!RequireMod()) return;
+        if (!await RequireMod()) return;
 
         practiceMatch = true;
         searchButton.Enabled = false;
@@ -1356,10 +1415,10 @@ public class MainForm : Form
         await SendLine(request);
     }
 
-    private void StartTestMatch()
+    private async void StartTestMatch()
     {
         if (inMatch || socket != null) return;
-        if (!RequireMod()) return;
+        if (!await RequireMod()) return;
 
         practiceMatch = false;
         testMode = true;
@@ -1405,6 +1464,13 @@ public class MainForm : Form
         lastRawChange = DateTime.UtcNow;
         lastOpponentRound = 0;
 
+        recordingOffset = 0;
+        if (!testMode)
+        {
+            StartFileWatch();
+            _ = SendLine("INTEGRITY;" + InstalledFilesHash());
+        }
+
         cleanupTimer.Stop();
         try
         {
@@ -1438,8 +1504,8 @@ public class MainForm : Form
 
     private void EndMatch(string status)
     {
-        if (inMatch && !testMode && matchCode != "") _ = SendRecording(matchCode);
         matchCode = "";
+        StopFileWatch();
         inMatch = false;
         testMode = false;
         pollTimer.Stop();
@@ -1455,35 +1521,203 @@ public class MainForm : Form
         opponentLabel.Text = "Last result: " + status;
     }
 
-    // Anti-cheat: the mod records the match (one line per second) in ranked/replay.txt.
-    // The file is sent to the server, which checks it and keeps it only if something looks wrong.
-    private async Task SendRecording(string code)
+    // ------------------------------------------------------------------ anti-cheat
+    //
+    // 1. Live recording. The mod appends one line per second to ranked/replay.txt. Every new line is
+    //    forwarded to the server while the match is running, so the server builds the recording itself
+    //    and stamps each line with its own clock: it cannot be rewritten after the match.
+    // 2. File check. A ranked match needs exactly the mod's scripts and plugin, unmodified, and nothing
+    //    else that the game could load. Checked before a search, and watched during the whole match.
+
+    private async Task StreamRecording()
     {
+        if (recordingBusy) return;
+        recordingBusy = true;
         try
         {
-            await Task.Delay(1200);         // lets the mod write its last lines; the folder is removed at 3 s
             string path = Path.Combine(rankedDir, "replay.txt");
-            if (!File.Exists(path)) { Log("No match recording to send"); return; }
+            if (!File.Exists(path)) return;
 
             string text;
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var reader = new StreamReader(stream))
-                text = await reader.ReadToEndAsync();
-
-            for (int attempt = 0; attempt < 3; attempt++)
             {
-                var request = new HttpRequestMessage(HttpMethod.Post, ServerHttpUrl + "/replay?code=" + Uri.EscapeDataString(code));
-                request.Headers.Add("X-Player-Token", identityToken);
-                request.Content = new StringContent(text, Encoding.UTF8, "text/plain");
-                HttpResponseMessage response = await web.SendAsync(request);
-                if (response.IsSuccessStatusCode) { Log("Match recording sent"); return; }
-                await Task.Delay(5000);     // the server may not have closed the match yet
+                if (stream.Length < recordingOffset) recordingOffset = 0;      // the mod started a new file
+                if (stream.Length == recordingOffset) return;
+                stream.Seek(recordingOffset, SeekOrigin.Begin);
+                var buffer = new byte[Math.Min(stream.Length - recordingOffset, 64 * 1024)];
+                int read = stream.Read(buffer, 0, buffer.Length);
+                text = Encoding.UTF8.GetString(buffer, 0, read);
             }
-            Log("Match recording could not be sent");
+
+            // Only complete lines: the mod may be in the middle of writing the last one.
+            int end = text.LastIndexOf('\n');
+            if (end < 0) return;
+            recordingOffset += Encoding.UTF8.GetByteCount(text.Substring(0, end + 1));
+
+            foreach (string line in text.Substring(0, end).Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.Length > 0) await SendLine("REC;" + trimmed);
+            }
+        }
+        catch (IOException)
+        {
+            // the game is writing the file: the rest goes out on the next tick
+        }
+        finally
+        {
+            recordingBusy = false;
+        }
+    }
+
+    // Short fingerprint of the installed mod scripts. Two players on the same version have the same one.
+    private static string InstalledFilesHash()
+    {
+        try
+        {
+            using (var sha = SHA256.Create())
+            using (var all = new MemoryStream())
+            {
+                foreach (string script in ModScripts)
+                {
+                    byte[] bytes = File.ReadAllBytes(Path.Combine(mapsDir, script));
+                    all.Write(bytes, 0, bytes.Length);
+                }
+                return Convert.ToHexString(sha.ComputeHash(all.ToArray())).Substring(0, 16).ToLowerInvariant();
+            }
+        }
+        catch (Exception)
+        {
+            return "unreadable";
+        }
+    }
+
+    private static string FileHash(string path)
+    {
+        try
+        {
+            using (var sha = SHA256.Create())
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                return Convert.ToHexString(sha.ComputeHash(stream)).ToLowerInvariant();
+            }
+        }
+        catch (Exception)
+        {
+            return "unreadable";
+        }
+    }
+
+    // Path shown to the player and to the admins: relative to the Plutonium folder, without the user name.
+    private static string ShortPath(string path)
+    {
+        return path.StartsWith(plutoniumDir, StringComparison.OrdinalIgnoreCase)
+            ? path.Substring(plutoniumDir.Length).TrimStart('\\', '/') : Path.GetFileName(path);
+    }
+
+    private static bool IsScriptFile(string path)
+    {
+        string extension = Path.GetExtension(path).ToLowerInvariant();
+        return extension == ".gsc" || extension == ".csc";
+    }
+
+    // Scripts and plugins that are not part of the mod: the game could load them during a ranked match.
+    private static List<string> ForeignFiles()
+    {
+        var found = new List<string>();
+        try
+        {
+            if (Directory.Exists(storageDir))
+            {
+                foreach (string path in Directory.EnumerateFiles(storageDir, "*", SearchOption.AllDirectories))
+                {
+                    if (!IsScriptFile(path)) continue;
+                    bool ours = string.Equals(Path.GetDirectoryName(path), mapsDir, StringComparison.OrdinalIgnoreCase)
+                        && ModScripts.Contains(Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+                    if (!ours) found.Add(path);
+                }
+            }
+            if (Directory.Exists(pluginsDir))
+            {
+                foreach (string path in Directory.EnumerateFiles(pluginsDir, "*.dll"))
+                {
+                    if (!string.Equals(Path.GetFileName(path), PluginFile, StringComparison.OrdinalIgnoreCase)) found.Add(path);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // a folder that cannot be read is not a reason to block the player
+        }
+        return found;
+    }
+
+    // During a match, any script or plugin file that is created, changed, renamed or removed ends the
+    // match as a defeat - even if it is put back a moment later.
+    private void StartFileWatch()
+    {
+        StopFileWatch();
+        violationSent = false;
+        try
+        {
+            if (Directory.Exists(storageDir))
+            {
+                scriptWatcher = new FileSystemWatcher(storageDir) { IncludeSubdirectories = true };
+                HookWatcher(scriptWatcher, path => IsScriptFile(path));
+            }
+            if (Directory.Exists(pluginsDir))
+            {
+                pluginWatcher = new FileSystemWatcher(pluginsDir);
+                HookWatcher(pluginWatcher, path => Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase));
+            }
         }
         catch (Exception ex)
         {
-            Log("Match recording could not be sent: " + ex.Message);
+            Log("Could not watch the mod files: " + ex.Message);
+        }
+    }
+
+    private void HookWatcher(FileSystemWatcher watcher, Func<string, bool> relevant)
+    {
+        watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime;
+        FileSystemEventHandler changed = (s, e) => { if (relevant(e.FullPath)) ReportViolation(e.FullPath); };
+        watcher.Changed += changed;
+        watcher.Created += changed;
+        watcher.Deleted += changed;
+        watcher.Renamed += (s, e) => { if (relevant(e.FullPath) || relevant(e.OldFullPath)) ReportViolation(e.FullPath); };
+        watcher.EnableRaisingEvents = true;
+    }
+
+    private void StopFileWatch()
+    {
+        try { scriptWatcher?.Dispose(); } catch { }
+        try { pluginWatcher?.Dispose(); } catch { }
+        scriptWatcher = null;
+        pluginWatcher = null;
+    }
+
+    // Called from a background thread by the file watchers.
+    private void ReportViolation(string path)
+    {
+        try
+        {
+            BeginInvoke(new Action(async () =>
+            {
+                if (!inMatch || testMode || violationSent) return;
+                violationSent = true;
+
+                string shortPath = ShortPath(path);
+                Log("File changed during the match: " + shortPath);
+                await SendLine("VIOLATION;" + shortPath.Replace(';', '_'));
+
+                // After the start, the server answers with the defeat. Before it, the match is just cancelled.
+                if (!goGiven) EndMatch("Match cancelled: a script or plugin file was changed");
+                else SetStatus("DEFEAT: a script or plugin file was changed during the match");
+            }));
+        }
+        catch (Exception)
+        {
+            // the window is closing
         }
     }
 
@@ -1492,6 +1726,10 @@ public class MainForm : Form
         if (!inMatch) return;
 
         FlushOpponentFile();
+
+        // Recording first: the line for the final round must reach the server before the final state.
+        if (!testMode && goGiven) await StreamRecording();
+        if (!inMatch) return;
 
         // --- my state: state.txt -> server ---
         // Format: round;zone;down;time_ms;finished;finish_time_ms;seed;goal;ready
