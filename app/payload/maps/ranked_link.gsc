@@ -595,6 +595,10 @@ rr_settings_watch()
 		{
 			reason = "sv_cheats";
 		}
+		else if ( getDvar( "fs_game" ) != "" )
+		{
+			reason = "mod loaded";		// un mod charge (Strat Tester...) remplace les scripts du jeu
+		}
 		else if ( getDvarInt( "developer" ) != 0 )
 		{
 			reason = "developer";
