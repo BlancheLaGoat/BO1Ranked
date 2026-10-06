@@ -218,6 +218,20 @@ rr_link_main()
 	hud_state = rr_link_hud( player, 100, 1.2 );
 	hud_result = rr_center_hud( player, -70, 2.4 );		// resultat du match, au centre de l'ecran
 
+	// Chronos de speedrun : temps total depuis le depart, et temps du round en cours.
+	hud_time_label = rr_link_hud( player, 126, 1.2 );
+	hud_time_label setText( "Time" );
+	level.rr_hud_time = rr_link_hud( player, 124, 1.5 );
+	level.rr_hud_time.x = 62;
+	level.rr_hud_time setTimerUp( 0 );
+	hud_split_label = rr_link_hud( player, 144, 1.2 );
+	hud_split_label setText( "Round" );
+	level.rr_hud_split = rr_link_hud( player, 142, 1.5 );
+	level.rr_hud_split.x = 62;
+	level.rr_timers_stopped = false;
+	level.rr_timer_start = start_time;
+	level thread rr_round_timer();
+
 	last_round = -1;
 	last_zone = "?";
 	last_state = -1;
@@ -280,6 +294,7 @@ rr_link_main()
 				setDvar( "ranked_my_finished", 1 );
 				setDvar( "ranked_my_finish_time", elapsed );
 				finish_time = elapsed;
+				rr_stop_timers( elapsed );
 				rr_record_sample( player );		// le round objectif doit figurer dans l'enregistrement
 
 				if ( !lost )
@@ -721,6 +736,40 @@ rr_spawn_after( seconds )
 	}
 }
 
+// Chrono du round : repart de zero au debut de chaque round, et affiche le temps final du round
+// entre deux rounds.
+rr_round_timer()
+{
+	level endon( "end_game" );
+
+	while ( !level.rr_timers_stopped )
+	{
+		round_start = getTime();
+		level.rr_hud_split setTimerUp( 0 );
+
+		level waittill( "end_of_round" );
+		if ( level.rr_timers_stopped )
+		{
+			return;
+		}
+		level.rr_hud_split setText( rr_format_time( getTime() - round_start ) );
+
+		level waittill( "start_of_round" );
+	}
+}
+
+// Fin du match : les deux chronos se figent.
+rr_stop_timers( elapsed )
+{
+	if ( !isDefined( level.rr_timers_stopped ) || level.rr_timers_stopped )
+	{
+		return;
+	}
+	level.rr_timers_stopped = true;
+	level.rr_hud_time setText( rr_format_time( elapsed ) );
+	level.rr_hud_split setText( "" );
+}
+
 rr_destroy_after( seconds )
 {
 	wait seconds;
@@ -785,6 +834,7 @@ rr_match_over( player )
 	}
 	level.rr_match_over = true;
 
+	rr_stop_timers( getTime() - level.rr_timer_start );
 	flag_clear( "spawn_zombies" );
 
 	hud = rr_center_hud( player, -30, 1.5 );
