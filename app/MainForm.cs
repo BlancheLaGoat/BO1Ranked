@@ -76,6 +76,7 @@ public class MainForm : Form
     private static readonly string mapsDir = Path.Combine(plutoniumDir, "storage", "t5", "maps");
     private static readonly string pluginsDir = Path.Combine(plutoniumDir, "plugins");
     private static readonly string storageDir = Path.Combine(plutoniumDir, "storage", "t5");
+    private static readonly string modsDir = Path.Combine(storageDir, "mods");
     private static readonly string rankedDir = Path.Combine(plutoniumDir, "storage", "t5", "ranked");
 
     private static readonly string settingsPath = Path.Combine(
@@ -1615,10 +1616,14 @@ public class MainForm : Form
             ? path.Substring(plutoniumDir.Length).TrimStart('\\', '/') : Path.GetFileName(path);
     }
 
+    // Scripts the game can load in a normal solo game. The "mods" folder is left alone: a mod
+    // (Strat Tester, for example) only runs when the player loads it, and the ranked mod itself
+    // refuses to play a match while a mod is loaded.
     private static bool IsScriptFile(string path)
     {
         string extension = Path.GetExtension(path).ToLowerInvariant();
-        return extension == ".gsc" || extension == ".csc";
+        if (extension != ".gsc" && extension != ".csc") return false;
+        return !path.StartsWith(modsDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     // Scripts and plugins that are not part of the mod: the game could load them during a ranked match.
