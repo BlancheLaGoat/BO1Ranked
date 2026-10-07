@@ -63,6 +63,7 @@ rr_stream_id( name )
 		case "drops":		return 4;	// power-ups
 		case "special":		return 5;	// rounds speciaux
 		case "drop_roll":	return 6;	// chance de drop a chaque kill
+		case "spawn_side":	return 7;	// Verruckt : cote de depart
 	}
 	return 99;
 }

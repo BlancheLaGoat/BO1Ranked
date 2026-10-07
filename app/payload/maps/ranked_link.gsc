@@ -763,6 +763,7 @@ rr_map_name( script )
 	{
 		case "zombie_theater":			return "Kino der Toten";
 		case "zombie_cod5_prototype":	return "Nacht der Untoten";
+		case "zombie_cod5_asylum":		return "Verruckt";
 	}
 	return script;
 }
@@ -927,6 +928,23 @@ rr_zone_name( zone )
 			case "start_zone":		return "Starting Room";
 			case "box_zone":		return "Help Room";
 			case "upstairs_zone":	return "Upstairs";
+		}
+		return zone;
+	}
+
+	if ( level.script == "zombie_cod5_asylum" )
+	{
+		switch ( zone )
+		{
+			case "west_downstairs_zone":	return "Spawn Room";
+			case "west2_downstairs_zone":	return "Spawn Room (other side)";
+			case "north_downstairs_zone":	return "North Downstairs";
+			case "north_upstairs_zone":		return "North Upstairs";
+			case "north2_upstairs_zone":	return "North Corridor";
+			case "kitchen_upstairs_zone":	return "Kitchen";
+			case "power_upstairs_zone":		return "Power Room";
+			case "south_upstairs_zone":		return "South Upstairs";
+			case "south2_upstairs_zone":	return "South Corridor";
 		}
 		return zone;
 	}
