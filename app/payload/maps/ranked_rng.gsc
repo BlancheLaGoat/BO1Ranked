@@ -64,6 +64,7 @@ rr_stream_id( name )
 		case "special":		return 5;	// rounds speciaux
 		case "drop_roll":	return 6;	// chance de drop a chaque kill
 		case "spawn_side":	return 7;	// Verruckt : cote de depart
+		case "perk_loc":	return 8;	// Shi No Numa : emplacement des atouts
 	}
 	return 99;
 }

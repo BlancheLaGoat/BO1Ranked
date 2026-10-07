@@ -79,7 +79,10 @@ rr_prestart()
 	{
 		wait 0.05;
 	}
-	rr_wait_for_go( get_players()[0], level.rr_goal );
+	if ( !isDefined( level.rr_restarted ) )
+	{
+		rr_wait_for_go( get_players()[0], level.rr_goal );
+	}
 	level.rr_go_done = true;
 
 	wait 2;		// delai normal du jeu avant le round 1
@@ -134,7 +137,9 @@ rr_link_main()
 		}
 		if ( fileExists( "ranked/go.txt" ) )
 		{
-			removeFile( "ranked/go.txt" );
+			// Le depart de ce match a deja ete donne : la partie vient d'etre relancee (restart,
+			// fast restart, map relancee). Le joueur n'est pas retenu au spawn, et il a perdu.
+			level.rr_restarted = true;
 		}
 		writeFile( "ranked/state.txt", "0;none;0;0;0;0;0;0;0" );
 	}
@@ -162,9 +167,17 @@ rr_link_main()
 	{
 		while ( !isDefined( level.rr_go_done ) )
 		{
-			player freezeControls( true );
+			if ( !isDefined( level.rr_restarted ) )
+			{
+				player freezeControls( true );
+			}
 			if ( !isDefined( level.rr_prestart_entered ) && rr_flag_is_set( "begin_spawning" ) )
 			{
+				if ( isDefined( level.rr_restarted ) )
+				{
+					level.rr_go_done = true;
+					break;
+				}
 				flag_clear( "spawn_zombies" );
 				rr_wait_for_go( player, goal );
 				level.rr_go_done = true;
@@ -323,11 +336,16 @@ rr_link_main()
 		}
 
 		// ---------------- mort ou abandon ----------------
-		if ( in_match && !finished && !lost && !opp_out && !gave_up && ( level.rr_surrender || level.rr_dead ) )
+		if ( in_match && !finished && !lost && !opp_out && !gave_up && ( level.rr_surrender || level.rr_dead || isDefined( level.rr_restarted ) ) )
 		{
 			gave_up = true;
 			hud_result.color = ( 1, 0.3, 0.3 );
-			if ( level.rr_surrender )
+			if ( isDefined( level.rr_restarted ) )
+			{
+				hud_result setText( "DEFEAT - the game was restarted" );
+				level thread rr_match_over( player );
+			}
+			else if ( level.rr_surrender )
 			{
 				hud_result setText( "DEFEAT - you surrendered" );
 				level thread rr_match_over( player );
@@ -764,6 +782,7 @@ rr_map_name( script )
 		case "zombie_theater":			return "Kino der Toten";
 		case "zombie_cod5_prototype":	return "Nacht der Untoten";
 		case "zombie_cod5_asylum":		return "Verruckt";
+		case "zombie_cod5_sumpf":		return "Shi No Numa";
 	}
 	return script;
 }
@@ -928,6 +947,25 @@ rr_zone_name( zone )
 			case "start_zone":		return "Starting Room";
 			case "box_zone":		return "Help Room";
 			case "upstairs_zone":	return "Upstairs";
+		}
+		return zone;
+	}
+
+	if ( level.script == "zombie_cod5_sumpf" )
+	{
+		switch ( zone )
+		{
+			case "center_building_upstairs":		return "Main Hut (upstairs)";
+			case "center_building_upstairs_buy":	return "Main Hut (back room)";
+			case "center_building_combined":		return "Main Hut (downstairs)";
+			case "northeast_outside":				return "North-East Swamp (zipline)";
+			case "northwest_outside":				return "North-West Swamp (flogger)";
+			case "southeast_outside":				return "South-East Swamp";
+			case "southwest_outside":				return "South-West Swamp";
+			case "northeast_building":				return "North-East Hut";
+			case "northwest_building":				return "North-West Hut";
+			case "southeast_building":				return "South-East Hut";
+			case "southwest_building":				return "South-West Hut";
 		}
 		return zone;
 	}
