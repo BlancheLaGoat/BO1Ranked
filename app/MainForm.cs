@@ -67,7 +67,8 @@ public class MainForm : Form
         "_zombiemode_powerups.gsc",
         "_zombiemode_ai_dogs.gsc",
         "ranked_rng.gsc",
-        "ranked_link.gsc"
+        "ranked_link.gsc",
+        "zombie_cod5_asylum.gsc"        // Verruckt: seeded starting side
     };
 
     private static readonly string plutoniumDir = Path.Combine(
@@ -100,6 +101,7 @@ public class MainForm : Form
     private readonly Button testButton = new Button();
     private readonly Button practiceButton = new Button();
     private readonly ComboBox mapBox = new ComboBox();       // map used for practice and local tests
+    private readonly ComboBox goalBox = new ComboBox();      // round to reach in an online practice
 
     // Maps the mod supports: script name used by the game, and the name shown to the player.
     // A ranked match's map is chosen by the server; this list is for practice and for display.
@@ -107,6 +109,7 @@ public class MainForm : Form
     {
         new[] { "zombie_theater", "Kino der Toten" },
         new[] { "zombie_cod5_prototype", "Nacht der Untoten" },
+        new[] { "zombie_cod5_asylum", "Verruckt" },
     };
     private string matchMap = "zombie_theater";
 
@@ -483,6 +486,16 @@ public class MainForm : Form
         foreach (string[] map in Maps) mapBox.Items.Add(map[1]);
         mapBox.SelectedIndex = 0;
 
+        var goalLabel = MakeLabel("Goal: round", PageMargin + 350, 340, 90, 22, 9f, FontStyle.Regular, ColorMuted);
+        goalBox.Location = new Point(PageMargin + 442, 336);
+        goalBox.Size = new Size(70, 26);
+        goalBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        goalBox.FlatStyle = FlatStyle.Flat;
+        goalBox.BackColor = ColorCard;
+        goalBox.ForeColor = ColorText;
+        foreach (string round in new[] { "3", "5", "10", "15", "20", "30" }) goalBox.Items.Add(round);
+        goalBox.SelectedIndex = 0;
+
         logBox.Location = new Point(PageMargin, 372);
         logBox.Size = new Size(ContentWidth, 164);
         logBox.IntegralHeight = false;
@@ -492,7 +505,7 @@ public class MainForm : Form
         logBox.ForeColor = ColorMuted;
         logBox.Font = new Font("Consolas", 9f);
 
-        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, practiceButton, testButton, stopButton, mapLabel, mapBox, logBox });
+        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, practiceButton, testButton, stopButton, mapLabel, mapBox, goalLabel, goalBox, logBox });
     }
 
     private void BuildLadderPage()
@@ -1428,7 +1441,7 @@ public class MainForm : Form
 
         practiceMatch = true;
         searchButton.Enabled = false;
-        await ConnectAndSend("PRACTICE;" + Maps[Math.Max(0, mapBox.SelectedIndex)][0]);
+        await ConnectAndSend("PRACTICE;" + Maps[Math.Max(0, mapBox.SelectedIndex)][0] + ";" + goalBox.SelectedItem);
     }
 
     // Opens the connection, identifies the player, then sends the first request:
