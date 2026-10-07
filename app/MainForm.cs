@@ -144,6 +144,7 @@ public class MainForm : Form
     private long recordingOffset;            // how much of ranked/replay.txt has already been sent to the server
     private bool recordingBusy;
     private bool violationSent;
+    private bool searchBusy;
     private bool deviceConsent;              // the player accepted the computer fingerprint (asked once)
     private FileSystemWatcher scriptWatcher;
     private FileSystemWatcher pluginWatcher;
@@ -195,6 +196,9 @@ public class MainForm : Form
 
         LoadSettings();
         LoadIdentity();
+        // The free server goes to sleep when nobody uses it and needs up to a minute to wake up.
+        // Waking it as soon as the app opens makes the first search much quicker.
+        _ = WakeServer();
         DeleteRankedFolder();       // leftovers from a crash or from an older version
         FormClosing += (s, e) => { SaveSettings(); DeleteRankedFolder(); };
 
@@ -1358,7 +1362,20 @@ public class MainForm : Form
 
     private async Task SearchClicked()
     {
-        if (inMatch) return;
+        if (inMatch || searchBusy) return;      // a click is already being handled
+        searchBusy = true;
+        try
+        {
+            await SearchClickedOnce();
+        }
+        finally
+        {
+            searchBusy = false;
+        }
+    }
+
+    private async Task SearchClickedOnce()
+    {
 
         // Second click while searching = cancel.
         if (socket != null)
@@ -1374,7 +1391,7 @@ public class MainForm : Form
 
         practiceMatch = false;
         searchButton.Text = "CANCEL SEARCH";
-        await ConnectAndSend("QUEUE");
+        _ = ConnectAndSend("QUEUE");       // not awaited: a second click must be able to cancel while it connects
     }
 
     private async Task PracticeClicked()
@@ -1393,6 +1410,11 @@ public class MainForm : Form
     // of this Windows installation and sends it at login. Only a one-way hash leaves the computer, and
     // the server hashes it again with its own secret key before storing it: nobody, the admins
     // included, can get the original identifier back. The player is told and has to agree first.
+    private async Task WakeServer()
+    {
+        try { await web.GetAsync(ServerHttpUrl + "/"); } catch { }
+    }
+
     private bool AskDeviceConsent()
     {
         if (deviceConsent) return true;
@@ -1451,22 +1473,34 @@ public class MainForm : Form
         uninstallButton.Enabled = false;
         SetStatus("Connecting to the server (can take up to a minute)...");
 
+        // Local copies: if the player cancels while the connection is being opened, "socket" no longer
+        // points to this connection, and this attempt must not touch whatever replaced it.
+        var cancel = new CancellationTokenSource();
+        var ws = new ClientWebSocket();
+        socketCancel = cancel;
+        socket = ws;
         try
         {
-            socketCancel = new CancellationTokenSource();
-            socket = new ClientWebSocket();
-            await socket.ConnectAsync(new Uri(ServerUrl), socketCancel.Token);
+            await ws.ConnectAsync(new Uri(ServerUrl), cancel.Token);
         }
         catch (Exception)
         {
+            if (socket != ws) { ws.Dispose(); return; }     // cancelled meanwhile
             Log("Server unreachable");
             SetStatus("Server unreachable - try again in a minute");
             await Disconnect();
             SetIdleButtons();
             return;
         }
+        if (socket != ws)
+        {
+            // Cancelled while connecting: this connection is not wanted any more.
+            try { ws.Abort(); } catch { }
+            ws.Dispose();
+            return;
+        }
 
-        _ = ReceiveLoop(socket, socketCancel.Token);
+        _ = ReceiveLoop(ws, cancel.Token);
 
         await SendLine("HELLO;" + playerName + ";" + AppVersionText + ";" + identityToken + ";" + DeviceFingerprint());
         await SendLine(request);
