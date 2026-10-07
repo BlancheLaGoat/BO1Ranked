@@ -68,7 +68,8 @@ public class MainForm : Form
         "_zombiemode_ai_dogs.gsc",
         "ranked_rng.gsc",
         "ranked_link.gsc",
-        "zombie_cod5_asylum.gsc"        // Verruckt: seeded starting side
+        "zombie_cod5_asylum.gsc",       // Verruckt: seeded starting side
+        "zombie_cod5_sumpf_perks.gsc"   // Shi No Numa: seeded perk locations
     };
 
     private static readonly string plutoniumDir = Path.Combine(
@@ -110,6 +111,7 @@ public class MainForm : Form
         new[] { "zombie_theater", "Kino der Toten" },
         new[] { "zombie_cod5_prototype", "Nacht der Untoten" },
         new[] { "zombie_cod5_asylum", "Verruckt" },
+        new[] { "zombie_cod5_sumpf", "Shi No Numa" },
     };
     private string matchMap = "zombie_theater";
 
