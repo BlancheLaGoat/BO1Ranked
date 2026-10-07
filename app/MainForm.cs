@@ -144,6 +144,7 @@ public class MainForm : Form
     private long recordingOffset;            // how much of ranked/replay.txt has already been sent to the server
     private bool recordingBusy;
     private bool violationSent;
+    private bool deviceConsent;              // the player accepted the computer fingerprint (asked once)
     private FileSystemWatcher scriptWatcher;
     private FileSystemWatcher pluginWatcher;
     private int matchGoal;
@@ -947,6 +948,7 @@ public class MainForm : Form
                 string[] lines = File.ReadAllLines(settingsPath);
                 if (lines.Length > 0 && CleanName(lines[0]).Length >= 3) playerName = CleanName(lines[0]);
                 if (lines.Length > 1) betaChannelSaved = lines[1].Trim();
+                if (lines.Length > 2) deviceConsent = lines[2].Trim() == "device=1";
             }
         }
         catch (Exception ex)
@@ -976,7 +978,7 @@ public class MainForm : Form
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath));
-            File.WriteAllLines(settingsPath, new[] { playerName, betaChannel ? "beta=1" : "beta=0" });
+            File.WriteAllLines(settingsPath, new[] { playerName, betaChannel ? "beta=1" : "beta=0", deviceConsent ? "device=1" : "device=0" });
         }
         catch
         {
@@ -1387,8 +1389,61 @@ public class MainForm : Form
 
     // Opens the connection, identifies the player, then sends the first request:
     // QUEUE for a ranked search, PRACTICE for a match against the server's bot.
+    // Anti-cheat: a ban applies to the computer, not only to the account. The app builds a fingerprint
+    // of this Windows installation and sends it at login. Only a one-way hash leaves the computer, and
+    // the server hashes it again with its own secret key before storing it: nobody, the admins
+    // included, can get the original identifier back. The player is told and has to agree first.
+    private bool AskDeviceConsent()
+    {
+        if (deviceConsent) return true;
+
+        DialogResult answer = MessageBox.Show(this,
+            "To keep banned cheaters from coming back under a new name, BO1 Ranked identifies your computer.\n\n"
+            + "What is sent: a one-way fingerprint (hash) computed from your Windows installation ID. The ID "
+            + "itself never leaves your computer, and the fingerprint cannot be turned back into it.\n\n"
+            + "What it is used for: applying bans to a computer, and showing the admins which accounts "
+            + "share a computer. Nothing else, and it is not shared with anyone.\n\n"
+            + "It is kept as long as your account exists. To have your account and fingerprint deleted, "
+            + "ask an admin.\n\n"
+            + "Do you agree? Online matches are not available without it.",
+            "BO1 Ranked - anti-cheat", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        if (answer != DialogResult.Yes) return false;
+
+        deviceConsent = true;
+        SaveSettings();
+        return true;
+    }
+
+    private static string DeviceFingerprint()
+    {
+        try
+        {
+            using (var hive = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64))
+            using (var key = hive.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography"))
+            {
+                string id = key?.GetValue("MachineGuid") as string;
+                if (string.IsNullOrWhiteSpace(id)) return "";
+                using (var sha = SHA256.Create())
+                {
+                    byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes("BO1Ranked-device|" + id.Trim().ToLowerInvariant()));
+                    return Convert.ToHexString(hash).ToLowerInvariant();
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
     private async Task ConnectAndSend(string request)
     {
+        if (!AskDeviceConsent())
+        {
+            SetStatus("Online matches need the anti-cheat agreement");
+            SetIdleButtons();
+            return;
+        }
         SaveSettings();
         testButton.Enabled = false;
         practiceButton.Enabled = false;
@@ -1413,7 +1468,7 @@ public class MainForm : Form
 
         _ = ReceiveLoop(socket, socketCancel.Token);
 
-        await SendLine("HELLO;" + playerName + ";" + AppVersionText + ";" + identityToken);
+        await SendLine("HELLO;" + playerName + ";" + AppVersionText + ";" + identityToken + ";" + DeviceFingerprint());
         await SendLine(request);
     }
 
