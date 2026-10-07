@@ -99,6 +99,23 @@ public class MainForm : Form
     private readonly Button searchButton = new Button();
     private readonly Button testButton = new Button();
     private readonly Button practiceButton = new Button();
+    private readonly ComboBox mapBox = new ComboBox();       // map used for practice and local tests
+
+    // Maps the mod supports: script name used by the game, and the name shown to the player.
+    // A ranked match's map is chosen by the server; this list is for practice and for display.
+    private static readonly string[][] Maps =
+    {
+        new[] { "zombie_theater", "Kino der Toten" },
+        new[] { "zombie_cod5_prototype", "Nacht der Untoten" },
+    };
+    private string matchMap = "zombie_theater";
+
+    private static string MapName(string id)
+    {
+        foreach (string[] map in Maps) if (map[0] == id) return map[1];
+        return id;
+    }
+
     private readonly Button stopButton = new Button();
     private readonly Label statusLabel = new Label();
     private readonly Label matchLabel = new Label();
@@ -456,8 +473,18 @@ public class MainForm : Form
         stopButton.Enabled = false;
         stopButton.Click += async (s, e) => await StopClicked();
 
-        logBox.Location = new Point(PageMargin, 342);
-        logBox.Size = new Size(ContentWidth, 194);
+        var mapLabel = MakeLabel("Practice map", PageMargin, 340, 110, 22, 9f, FontStyle.Regular, ColorMuted);
+        mapBox.Location = new Point(PageMargin + 112, 336);
+        mapBox.Size = new Size(220, 26);
+        mapBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        mapBox.FlatStyle = FlatStyle.Flat;
+        mapBox.BackColor = ColorCard;
+        mapBox.ForeColor = ColorText;
+        foreach (string[] map in Maps) mapBox.Items.Add(map[1]);
+        mapBox.SelectedIndex = 0;
+
+        logBox.Location = new Point(PageMargin, 372);
+        logBox.Size = new Size(ContentWidth, 164);
         logBox.IntegralHeight = false;
         logBox.HorizontalScrollbar = true;
         logBox.BorderStyle = BorderStyle.None;
@@ -465,7 +492,7 @@ public class MainForm : Form
         logBox.ForeColor = ColorMuted;
         logBox.Font = new Font("Consolas", 9f);
 
-        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, practiceButton, testButton, stopButton, logBox });
+        playPage.Controls.AddRange(new Control[] { statusLabel, searchButton, card, practiceButton, testButton, stopButton, mapLabel, mapBox, logBox });
     }
 
     private void BuildLadderPage()
@@ -1401,7 +1428,7 @@ public class MainForm : Form
 
         practiceMatch = true;
         searchButton.Enabled = false;
-        await ConnectAndSend("PRACTICE");
+        await ConnectAndSend("PRACTICE;" + Maps[Math.Max(0, mapBox.SelectedIndex)][0]);
     }
 
     // Opens the connection, identifies the player, then sends the first request:
@@ -1513,6 +1540,7 @@ public class MainForm : Form
 
         practiceMatch = false;
         testMode = true;
+        matchMap = Maps[Math.Max(0, mapBox.SelectedIndex)][0];
         testBotRunning = false;
         testBotFinished = false;
         BeginMatch(new Random().Next(1, 1000000), TestGoal, "Test bot", 0);
@@ -1568,7 +1596,7 @@ public class MainForm : Form
             Directory.CreateDirectory(rankedDir);
             DeleteRankedFile("opponent.txt");
             DeleteRankedFile("go.txt");
-            File.WriteAllText(Path.Combine(rankedDir, "match.txt"), seed + ";" + goal);
+            File.WriteAllText(Path.Combine(rankedDir, "match.txt"), seed + ";" + goal + ";" + matchMap);
         }
         catch (Exception ex)
         {
@@ -1583,12 +1611,12 @@ public class MainForm : Form
         uninstallButton.Enabled = false;
         stopButton.Enabled = true;
 
-        SetStatus("Match found: start Kino (solo), then ready up in game");
+        SetStatus("Match found: start " + MapName(matchMap) + " (solo), then ready up in game");
         matchLabel.Text = "vs " + opponentName + (opponentElo > 0 ? "  (" + opponentElo + " Elo)" : "")
-            + "     seed " + seed + "     goal: round " + goal;
+            + "     " + MapName(matchMap) + "     seed " + seed + "     goal: round " + goal;
         opponentLabel.Text = "Waiting for both players to ready up in game";
         ShowPage(playPage);
-        Log("Match vs " + opponentName + ", seed " + seed);
+        Log("Match vs " + opponentName + " on " + MapName(matchMap) + ", seed " + seed);
 
         pollTimer.Start();
     }
@@ -2217,6 +2245,7 @@ public class MainForm : Form
                 {
                     testMode = false;
                     matchCode = f.Length >= 6 ? f[5] : "";
+                    matchMap = f.Length >= 7 && f[6] != "" ? f[6] : "zombie_theater";
                     BeginMatch(ParseInt(f[1]), ParseInt(f[2]), f[3], f.Length >= 5 ? ParseInt(f[4]) : 0);
                 }
                 break;
