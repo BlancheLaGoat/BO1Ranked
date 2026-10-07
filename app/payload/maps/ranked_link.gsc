@@ -440,6 +440,18 @@ rr_link_main()
 			}
 		}
 
+		// 3 = l'app a vu un fichier de script ou un plugin changer pendant le match : defaite.
+		if ( opp_finished == 3 && !finished && !lost && !gave_up && !opp_out )
+		{
+			gave_up = true;
+			hud_result.color = ( 1, 0.3, 0.3 );
+			hud_result setText( "DEFEAT - a game file was changed during the match" );
+			if ( in_match )
+			{
+				level thread rr_match_over( player );
+			}
+		}
+
 		if ( opp_finished == 2 && !finished && !lost && !gave_up && !opp_out )
 		{
 			opp_out = true;
