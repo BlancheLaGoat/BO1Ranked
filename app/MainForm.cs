@@ -1751,7 +1751,13 @@ public class MainForm : Form
 
                 // After the start, the server answers with the defeat. Before it, the match is just cancelled.
                 if (!goGiven) EndMatch("Match cancelled: a script or plugin file was changed");
-                else SetStatus("DEFEAT: a script or plugin file was changed during the match");
+                else
+                {
+                    // Tells the game too (4th field = 3): it shows the defeat and goes back to the menu.
+                    ShowOpponent(lastOpponentRound, "none", 0, 3);
+                    FlushOpponentFile();
+                    SetStatus("DEFEAT: a script or plugin file was changed during the match");
+                }
             }));
         }
         catch (Exception)
