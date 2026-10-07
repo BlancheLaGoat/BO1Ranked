@@ -112,6 +112,12 @@ rr_link_main()
 		{
 			goal = int( tokens[1] );
 			in_match = true;
+			// Map du match (nom du script, ex. zombie_theater). Si le joueur en a lance une autre,
+			// il ne peut pas se declarer pret : voir rr_wait_for_go.
+			if ( tokens.size >= 3 && tokens[2] != "" && tokens[2] != level.script )
+			{
+				level.rr_wrong_map = rr_map_name( tokens[2] );
+			}
 		}
 	}
 
@@ -498,6 +504,11 @@ rr_wait_for_go( player, goal )
 	hud.alpha = 1;
 	hud.color = ( 1, 1, 1 );
 	hud setText( "Press USE or FIRE when you are ready" );
+	if ( isDefined( level.rr_wrong_map ) )
+	{
+		hud.color = ( 1, 0.3, 0.3 );
+		hud setText( "Wrong map - this match is on " + level.rr_wrong_map + ". Quit and start it in solo." );
+	}
 
 	seed = 0;
 	if ( isDefined( level.rr_seed ) )
@@ -513,7 +524,7 @@ rr_wait_for_go( player, goal )
 	{
 		player freezeControls( true );
 
-		if ( !ready && ( player useButtonPressed() || player attackButtonPressed() ) )
+		if ( !ready && !isDefined( level.rr_wrong_map ) && ( player useButtonPressed() || player attackButtonPressed() ) )
 		{
 			ready = 1;
 			hud.color = ( 0.3, 1, 0.3 );
@@ -635,7 +646,7 @@ rr_settings_watch()
 		{
 			reason = "ai_disableSpawn";
 		}
-		else if ( getDvar( "magic_chest_movable" ) != "1" )
+		else if ( getDvar( "magic_chest_movable" ) != rr_expected_chest_movable() )
 		{
 			reason = "magic_chest_movable";
 		}
@@ -734,6 +745,26 @@ rr_event( text )
 	}
 	t = int( ( getTime() - level.rr_rec_start ) / 1000 );
 	appendFile( "ranked/replay.txt", "E;" + t + ";" + text + "\n" );
+}
+
+// Sur Nacht der Untoten la box ne bouge jamais : le jeu y met lui-meme ce reglage a 0.
+rr_expected_chest_movable()
+{
+	if ( level.script == "zombie_cod5_prototype" )
+	{
+		return "0";
+	}
+	return "1";
+}
+
+rr_map_name( script )
+{
+	switch ( script )
+	{
+		case "zombie_theater":			return "Kino der Toten";
+		case "zombie_cod5_prototype":	return "Nacht der Untoten";
+	}
+	return script;
 }
 
 // Fin de partie (mort du joueur en solo) = defaite.
@@ -876,13 +907,32 @@ rr_format_time( ms )
 	return minutes + ":" + seconds;
 }
 
-// Nom lisible des zones. Kino pour l'instant ; une zone inconnue s'affiche telle quelle.
+// Nom lisible des zones, par map. Une zone inconnue s'affiche telle quelle.
 rr_zone_name( zone )
 {
+	if ( zone == "" )
+	{
+		return "";
+	}
+	if ( zone == "paused" )
+	{
+		return "GAME PAUSED";
+	}
+
+	// Les noms viennent de la map de l'adversaire, qui est la meme que la mienne.
+	if ( level.script == "zombie_cod5_prototype" )
+	{
+		switch ( zone )
+		{
+			case "start_zone":		return "Starting Room";
+			case "box_zone":		return "Help Room";
+			case "upstairs_zone":	return "Upstairs";
+		}
+		return zone;
+	}
+
 	switch ( zone )
 	{
-		case "":					return "";
-		case "paused":				return "GAME PAUSED";
 		case "foyer_zone":			return "Lobby";
 		case "foyer2_zone":			return "Lobby (back)";
 		case "vip_zone":			return "Upper Hall";
