@@ -1907,6 +1907,9 @@ public class MainForm : Form
     private void ShowOpponent(int round, string zone, int down, int finished)
     {
         lastOpponentRound = round;
+        // Once a file change has been reported, the game must keep seeing the defeat: a later update
+        // about the opponent must not erase it before the game has read it.
+        if (violationSent && goGiven) finished = 3;
         pendingOpponentLine = round + ";" + zone + ";" + down + ";" + finished;
         opponentLabel.Text = "Opponent: round " + round + " - " + zone + (down == 1 ? " - DOWN" : "");
     }
